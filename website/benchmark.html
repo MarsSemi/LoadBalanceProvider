@@ -1,0 +1,1918 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>基準測試</title>
+  <script src="i18n.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --panel: #ffffff;
+      --surface: #f3f3f3;
+      --line: #dedede;
+      --line-soft: #ececec;
+      --text: #171717;
+      --muted: #747474;
+      --green: #159447;
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html,
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar,
+    .page::-webkit-scrollbar,
+    .table-wrap::-webkit-scrollbar {
+      display: none;
+    }
+    button, select, input { font: inherit; }
+    button { cursor: pointer; }
+
+    .page {
+      width: min(1232px, calc(100vw - 48px));
+      margin: 36px auto 48px;
+    }
+
+    .tabs {
+      display: inline-flex;
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+
+    .tabs-divider {
+      height: 1px;
+      background: var(--line);
+      margin-bottom: 20px;
+    }
+
+    .tab {
+      border: 0;
+      background: transparent;
+      min-height: 42px;
+      padding: 0 20px;
+      border-radius: 999px;
+      color: #444;
+    }
+
+    .tab.active { background: #111; color: #fff; }
+
+    .hero {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 34px;
+    }
+
+    .kicker {
+      color: #999;
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    p {
+      margin: 0;
+      color: #666;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+
+    .panel-header {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      color: #565656;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    .panel-title,
+    .soft-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .soft-button {
+      height: 36px;
+      border: 0;
+      border-radius: var(--radius);
+      padding: 0 16px;
+      background: #f0f0f0;
+      color: #444;
+      white-space: nowrap;
+    }
+
+    .form {
+      padding: 24px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .fields {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 448px));
+      gap: 18px;
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 8px;
+      max-width: 448px;
+    }
+
+    .option-pair {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 448px));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .option-block {
+      display: grid;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .label {
+      color: #333;
+      font-size: 14px;
+      font-weight: 800;
+    }
+
+    select {
+      height: 40px;
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      padding: 0 14px;
+    }
+
+    .options {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px 16px;
+      align-items: center;
+    }
+
+    .options label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: #555;
+      font-size: 14px;
+    }
+
+    .options input {
+      width: 16px;
+      height: 16px;
+    }
+
+    .radio-options input {
+      appearance: none;
+      border: 1px solid #999;
+      border-radius: 50%;
+      background: #fff;
+      display: inline-grid;
+      place-items: center;
+    }
+
+    .radio-options input::after {
+      content: "";
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      transform: scale(0);
+      transition: transform .12s ease;
+      background: #1578ff;
+    }
+
+    .radio-options input:checked {
+      border-color: #1578ff;
+    }
+
+    .radio-options input:checked::after {
+      transform: scale(1);
+    }
+
+    .toggle-row {
+      display: grid;
+      gap: 8px;
+    }
+
+    .toggle-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: #555;
+      width: fit-content;
+    }
+
+    .toggle-control input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .toggle-track {
+      width: 44px;
+      height: 24px;
+      border-radius: 999px;
+      background: #e4e4e4;
+      position: relative;
+      transition: background .16s ease;
+    }
+
+    .toggle-track::after {
+      content: "";
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      top: 2px;
+      left: 2px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, .16);
+      transition: transform .16s ease;
+    }
+
+    .toggle-control input:checked + .toggle-track {
+      background: #111;
+    }
+
+    .toggle-control input:checked + .toggle-track::after {
+      transform: translateX(20px);
+    }
+
+    .benchmark-body {
+      padding: 18px 24px 24px;
+      display: grid;
+      gap: 22px;
+    }
+
+    .benchmark-section-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      overflow: hidden;
+      background: #fff;
+    }
+
+    .benchmark-section-toggle {
+      width: 100%;
+      min-height: 48px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      color: #565656;
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      font-weight: 900;
+      text-align: left;
+    }
+
+    .benchmark-section-toggle .title {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: #565656;
+      font-size: 13px;
+      letter-spacing: .04em;
+    }
+
+    .benchmark-section-toggle .chevron {
+      transition: transform .16s ease;
+    }
+
+    .benchmark-section-card.collapsed .benchmark-section-toggle {
+      border-bottom-color: transparent;
+    }
+
+    .benchmark-section-card.collapsed .benchmark-section-toggle .chevron {
+      transform: rotate(-90deg);
+    }
+
+    .benchmark-section-content {
+      padding: 22px 24px 18px;
+      display: grid;
+      gap: 30px;
+    }
+
+    .benchmark-section-card.collapsed .benchmark-section-content {
+      display: none;
+    }
+
+    .benchmark-category {
+      display: grid;
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .benchmark-category:first-child {
+      margin-top: 0;
+    }
+
+    .category-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #777;
+      font-size: 12px;
+      font-weight: 900;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .category-title::after {
+      content: "";
+      height: 1px;
+      flex: 1;
+      background: var(--line);
+    }
+
+    .benchmark-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .benchmark-card {
+      min-height: 124px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 18px 16px 16px;
+      display: grid;
+      grid-template-rows: auto 32px auto auto;
+      gap: 10px;
+      align-content: start;
+      text-align: left;
+      color: #777;
+      position: relative;
+      transition: background .16s ease, color .16s ease, border-color .16s ease, box-shadow .16s ease;
+      cursor: pointer;
+    }
+
+    .benchmark-card.selected {
+      background: #171717;
+      border-color: #171717;
+      color: #fff;
+      box-shadow: 0 8px 18px rgba(0, 0, 0, .16);
+    }
+
+    .benchmark-card.selected::after {
+      content: "✓";
+      position: absolute;
+      top: 12px;
+      right: 14px;
+      color: #fff;
+      font-size: 20px;
+      font-weight: 900;
+    }
+
+    .benchmark-name {
+      font-size: 19px;
+      font-weight: 900;
+      color: currentColor;
+      line-height: 1.2;
+    }
+
+    .benchmark-desc {
+      color: currentColor;
+      opacity: .68;
+      font-size: 11px;
+      line-height: 1.35;
+      min-height: 32px;
+      max-height: 32px;
+      overflow: hidden;
+    }
+
+    .benchmark-card select {
+      height: 30px;
+      color: inherit;
+      background: rgba(255, 255, 255, .72);
+      border-color: rgba(0, 0, 0, .06);
+      font-size: 12px;
+      padding: 0 10px;
+    }
+
+    .benchmark-card.selected select {
+      background: #565656;
+      border-color: rgba(255, 255, 255, .32);
+      color: #fff;
+    }
+
+    .benchmark-card.disabled {
+      opacity: .45;
+      cursor: default;
+    }
+
+    .benchmark-warning {
+      width: fit-content;
+      border-radius: 4px;
+      background: #fff2c2;
+      color: #9b6500;
+      padding: 2px 6px;
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .intelligence-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .danger-button {
+      width: fit-content;
+      min-height: 40px;
+      border: 0;
+      border-radius: var(--radius);
+      background: #e02020;
+      color: #fff;
+      padding: 0 22px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+    }
+
+    .danger-button:disabled {
+      background: #b8b8b8;
+      cursor: default;
+    }
+
+    .intelligence-runtime {
+      display: none;
+      margin-top: 24px;
+    }
+
+    .intelligence-runtime.active {
+      display: grid;
+      gap: 24px;
+    }
+
+    .queue-label {
+      color: #999;
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .queue-chip {
+      width: fit-content;
+      min-height: 32px;
+      border-radius: 8px;
+      background: #171717;
+      color: #fff;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      font-size: 14px;
+    }
+
+    .spinner-dot {
+      width: 13px;
+      height: 13px;
+      border: 2px solid rgba(255, 255, 255, .28);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .8s linear infinite;
+    }
+
+    .intelligence-progress-card {
+      padding: 20px 24px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .intelligence-progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .intelligence-progress-title {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 0;
+      color: #333;
+    }
+
+    .intelligence-progress-title .model {
+      color: #999;
+      font-size: 12px;
+      font-weight: 900;
+      text-transform: uppercase;
+    }
+
+    .intelligence-progress-title .separator {
+      color: #c9c9c9;
+    }
+
+    .intelligence-progress-side {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      color: #999;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .mini-cancel {
+      height: 26px;
+      border: 0;
+      border-radius: 7px;
+      background: #111;
+      color: #fff;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .intelligence-detail {
+      color: #999;
+      font-size: 12px;
+    }
+
+    .note {
+      color: #999;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+
+    .run {
+      width: fit-content;
+      min-height: 40px;
+      border: 0;
+      border-radius: var(--radius);
+      background: #111;
+      color: #fff;
+      padding: 0 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+    }
+
+    .run:disabled {
+      background: #aaa;
+      cursor: default;
+    }
+
+    .progress-panel {
+      padding: 16px 24px;
+      display: none;
+    }
+
+    .progress-panel.active { display: block; }
+
+    .progress-row {
+      display: grid;
+      grid-template-columns: minmax(180px, 1.2fr) minmax(160px, 2fr) auto;
+      align-items: center;
+      gap: 16px;
+      color: #444;
+      font-size: 14px;
+    }
+
+    .progress-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      white-space: nowrap;
+    }
+
+    .progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #e6e6e6;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      background: #111;
+      transition: width .18s ease;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .table-wrap { overflow-x: auto; }
+    .page,
+    .table-wrap {
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    th, td {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line-soft);
+      text-align: right;
+      color: #555;
+      white-space: nowrap;
+    }
+
+    th:first-child,
+    td:first-child {
+      text-align: left;
+      color: #222;
+      font-weight: 800;
+    }
+
+    th {
+      background: #fafafa;
+      color: #555;
+      font-weight: 800;
+    }
+
+    tr:last-child td { border-bottom: 0; }
+    .strong { color: #111; font-weight: 900; }
+    .good { color: var(--green); font-weight: 900; }
+    .tps-value { color: #8b1e1e; }
+    .baseline-row td,
+    .baseline-row td:first-child,
+    .baseline-row .strong,
+    .baseline-row .good {
+      color: #cacaca !important;
+    }
+
+    .reference {
+      padding: 20px 24px 26px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px 42px;
+      color: #666;
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .reference strong { color: #222; }
+
+    .empty {
+      min-height: 96px;
+      display: grid;
+      place-items: center;
+      color: #999;
+    }
+
+    .view { display: none; }
+    .view.active { display: block; }
+
+    @media (max-width: 900px) {
+      .page { width: min(100% - 32px, 720px); margin-top: 24px; }
+      .hero { flex-direction: column; }
+      .fields,
+      .option-pair,
+      .reference { grid-template-columns: 1fr; }
+
+      .benchmark-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .progress-row {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .benchmark-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="tabs" role="tablist" aria-label="基準測試類型">
+      <button class="tab active" type="button" data-tab="performance">Performance</button>
+      <button class="tab" type="button" data-tab="intelligence">Intelligence</button>
+    </div>
+    <div class="tabs-divider" aria-hidden="true"></div>
+
+    <section class="view active" id="performanceView">
+      <section class="hero">
+        <div>
+          <div class="kicker">基準測試</div>
+          <h1>效能基準測試</h1>
+          <p>測量單一請求和連續批次處理的推論速度。基準測試前將卸載其他模型。</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="M4 7h10"></path><path d="M4 17h10"></path><path d="M18 7h2"></path><path d="M18 17h2"></path><path d="M14 7a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path><path d="M14 17a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path></svg>
+            設定
+          </div>
+        </header>
+        <div class="form">
+          <div class="fields">
+            <div class="field">
+              <label class="label" for="benchmarkProvider">Provider</label>
+              <select id="benchmarkProvider"></select>
+            </div>
+            <div class="field">
+              <label class="label" for="benchmarkModel">模型</label>
+              <select id="benchmarkModel"></select>
+            </div>
+          </div>
+
+          <div class="option-pair">
+            <div class="option-block">
+              <div class="label">單一請求測試</div>
+              <div class="options" id="singleBenchmarks">
+                <label><input type="checkbox" value="1024" checked> pp1024</label>
+                <label><input type="checkbox" value="4096" checked> pp4096</label>
+                <label><input type="checkbox" value="8192"> pp8192</label>
+                <label><input type="checkbox" value="16384"> pp16384</label>
+              </div>
+              <div class="note">生成長度：128 tokens（固定）</div>
+            </div>
+
+            <div class="option-block">
+              <div class="label">連續批次處理測試</div>
+              <div class="options" id="batchBenchmarks">
+                <label><input type="checkbox" value="2" checked> 2x batch</label>
+                <label><input type="checkbox" value="4" checked> 4x batch</label>
+                <label><input type="checkbox" value="6"> 6x batch</label>
+              </div>
+              <div class="note">批次處理測試使用 pp1024 / tg128</div>
+            </div>
+          </div>
+
+          <button class="run" type="button" id="runBenchmark">
+            <svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"></path></svg>
+            執行基準測試
+          </button>
+        </div>
+      </section>
+
+      <section class="panel progress-panel" id="progressPanel">
+        <div class="progress-row">
+          <strong id="progressLabel">準備中</strong>
+          <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+          <span class="progress-actions"><span id="progressCount">0 / 0</span><button class="soft-button" type="button" id="cancelBenchmark">取消</button></span>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7Z"></path></svg>
+            單一請求結果
+          </div>
+        </header>
+        <div id="singleResult" class="empty">尚未執行基準測試</div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="m7 7 5-3 5 3-5 3-5-3Z"></path><path d="m7 12 5 3 5-3"></path><path d="m7 17 5 3 5-3"></path></svg>
+            併行處理
+          </div>
+          <span class="note">pp1024 / tg128</span>
+        </header>
+        <div id="batchResult" class="empty">尚未執行批次測試</div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="M4 19.5V5a2 2 0 0 1 2-2h6v16H6a2 2 0 0 0-2 2Z"></path><path d="M20 19.5V5a2 2 0 0 0-2-2h-6v16h6a2 2 0 0 1 2 2Z"></path></svg>
+            指標參考
+          </div>
+        </header>
+        <div class="reference">
+          <div><strong>TTFT</strong>（首個 Token 生成時間）<br>模型開始回應前的延遲。衡量 Prompt 處理速度，越低越好。</div>
+          <div><strong>pp TPS</strong>（Prompt 處理 TPS）<br>預填充階段每秒處理的輸入 Token 數，越高越好。</div>
+          <div><strong>TPOT</strong>（每個 Token 的耗時）<br>每個 Token 生成之間的平均耗時，越低越好。</div>
+          <div><strong>端到端延遲</strong>（End-to-End）<br>從提交請求到完整回應的總時間，包含預填充與生成。</div>
+          <div><strong>tg TPS</strong>（Token 生成 TPS）<br>每秒生成的 Token 數，為 TPOT 的倒數，越高越好。</div>
+          <div><strong>總吞吐量</strong><br>每秒處理的 Token 總數（輸入 + 輸出），衡量整體使用率。</div>
+          <div><strong>批次大小</strong><br>同時處理的並發請求數。批次越大總吞吐量越高，但單個請求延遲會增加。</div>
+          <div><strong>加速比</strong><br>相對於單一請求基準（1x）的 Token 生成吞吐量倍數，越高越好。</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="view" id="intelligenceView">
+      <section class="hero">
+        <div>
+          <div class="kicker">INTELLIGENCE</div>
+          <h1>智慧基準測試</h1>
+          <p>透過知識、推理、數學和程式碼基準評估模型智慧。基準測試前將卸載所有其他模型。</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="M4 7h10"></path><path d="M4 17h10"></path><path d="M18 7h2"></path><path d="M18 17h2"></path><path d="M14 7a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path><path d="M14 17a2 2 0 1 0 4 0 2 2 0 0 0-4 0Z"></path></svg>
+            設定
+          </div>
+        </header>
+        <div class="form">
+          <div class="fields">
+            <div class="field">
+              <label class="label" for="intelligenceProvider">Provider</label>
+              <select id="intelligenceProvider"></select>
+            </div>
+            <div class="field">
+              <label class="label" for="intelligenceModel">模型</label>
+              <select id="intelligenceModel"></select>
+            </div>
+          </div>
+
+          <div class="option-pair">
+            <div class="toggle-row option-block">
+              <div class="label">Thinking Mode</div>
+              <label class="toggle-control">
+                <input type="checkbox" id="thinkingMode">
+                <span class="toggle-track" aria-hidden="true"></span>
+                <span id="thinkingModeText">Off</span>
+              </label>
+              <div class="note">預設使用模型的「啟用思考」設定。即使停用，也會自動偵測模型是否進行思考。</div>
+            </div>
+
+            <div class="option-block">
+              <div class="label">批次大小</div>
+              <div class="options radio-options" id="intelligenceBatchSizes">
+                <label><input type="radio" name="intelligenceBatchSize" value="1" checked> 1x</label>
+                <label><input type="radio" name="intelligenceBatchSize" value="2"> 2x</label>
+                <label><input type="radio" name="intelligenceBatchSize" value="4"> 4x</label>
+                <label><input type="radio" name="intelligenceBatchSize" value="6"> 6x</label>
+              </div>
+              <div class="note">同時處理多個問題。批次越大速度越快，但佔用更多記憶體。</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="benchmark-body">
+          <section class="benchmark-section-card collapsed" id="intelligenceBenchmarkCard">
+            <button class="benchmark-section-toggle" type="button" id="toggleIntelligenceBenchmarks" aria-expanded="false" aria-controls="intelligenceBenchmarkContent">
+              <span class="title">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16"></path><path d="M4 12h16"></path><path d="M4 17h16"></path></svg>
+                基準測試
+              </span>
+              <svg class="chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"></path></svg>
+            </button>
+            <div class="benchmark-section-content" id="intelligenceBenchmarkContent">
+              <div id="intelligenceBenchmarks"></div>
+              <div class="note">固定種子取樣確保不同模型使用相同問題進行公平比較。選擇 Full 使用完整資料集。</div>
+            </div>
+          </section>
+          <div class="intelligence-actions">
+            <button class="run" type="button" id="runIntelligence" disabled>
+              <svg viewBox="0 0 24 24"><path d="m8 5 11 7-11 7Z"></path></svg>
+              執行
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="intelligence-runtime" id="intelligenceRuntime" aria-live="polite">
+        <section class="panel intelligence-progress-card">
+          <div class="intelligence-progress-head">
+            <div class="intelligence-progress-title">
+              <span class="model" id="intelligenceProgressModel">MODEL</span>
+              <span class="separator">・</span>
+              <strong id="intelligenceProgressLabel">準備中</strong>
+            </div>
+            <div class="intelligence-progress-side">
+              <span id="intelligenceProgressCount">0 / 0</span>
+              <button class="mini-cancel" type="button" id="cancelIntelligenceInline">
+                <svg viewBox="0 0 24 24"><path d="M8 8h8v8H8Z"></path></svg>
+                取消
+              </button>
+            </div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="intelligenceProgressFill"></div></div>
+          <div class="intelligence-detail" id="intelligenceProgressDetail">等待執行</div>
+        </section>
+      </section>
+
+      <section class="panel" id="intelligenceResultPanel" hidden>
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg viewBox="0 0 24 24"><path d="m13 2-8 12h7l-1 8 8-12h-7Z"></path></svg>
+            智慧測試結果
+          </div>
+        </header>
+        <div id="intelligenceResults" class="empty">尚未完成測試</div>
+      </section>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      providers: [],
+      status: [],
+      running: false,
+      abortController: null,
+      intelligenceRunning: false,
+      intelligenceJobId: "",
+      intelligenceTimer: null,
+      intelligenceSelections: new Set(["truthfulqa", "humaneval"]),
+      providerModels: {},
+      intelligenceGroups: []
+    };
+
+    const intelligenceStorageKey = "lbp.benchmark.intelligence";
+
+    let intelligenceGroups = [
+      {
+        title: "COMMONSENSE & REASONING",
+        items: [
+          { id: "hellaswag", name: "HellaSwag", desc: "Commonsense reasoning", options: ["20", "50", "200", "500", "Full"] },
+          { id: "arc_challenge", name: "ARC-C", desc: "Science reasoning", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "winogrande", name: "Winogrande", desc: "Coreference resolution", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "truthfulqa", name: "TruthfulQA", desc: "Truthfulness", options: ["20", "50", "300", "Full (817)"] }
+        ]
+      },
+      {
+        title: "MATH",
+        items: [
+          { id: "gsm8k", name: "GSM8K", desc: "Math reasoning", options: ["20", "50", "100", "300", "Full"] },
+          { id: "mathqa", name: "MathQA", desc: "Quantitative reasoning・5-way", options: ["20", "50", "300", "1000", "Full"] }
+        ]
+      },
+      {
+        title: "CODING",
+        items: [
+          { id: "humaneval", name: "HumanEval", desc: "Function completion", options: ["20", "50", "100", "Full (164)"], requiresExecution: true },
+          { id: "mbpp", name: "MBPP", desc: "Python problems", options: ["20", "50", "200", "500", "Full"], requiresExecution: true },
+          { id: "livecodebench", name: "LiveCodeBench", desc: "Code generation", options: ["20", "50", "100", "300", "Full"], requiresExecution: true }
+        ]
+      },
+      {
+        title: "SAFETY & ALIGNMENT",
+        items: [
+          { id: "bbq", name: "BBQ", desc: "Social bias・11 categories", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "safetybench", name: "SafetyBench", desc: "Safety・7 categories", options: ["20", "50", "300", "1000", "Full"] }
+        ]
+      },
+      {
+        title: "KNOWLEDGE",
+        items: [
+          { id: "mmlu", name: "MMLU", desc: "Knowledge・57 subjects", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "mmlu_pro", name: "MMLU-Pro", desc: "Hard knowledge・14 subjects (10-way)", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "kmmlu", name: "KMMLU", desc: "한국어 지식・45 과목", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "cmmlu", name: "CMMLU", desc: "中文知識・67 科目", options: ["20", "50", "300", "1000", "Full"] },
+          { id: "jmmlu", name: "JMMLU", desc: "日本語知識・112 科目", options: ["20", "50", "300", "1000", "Full"] }
+        ]
+      }
+    ];
+
+    const els = {
+      provider: document.getElementById("benchmarkProvider"),
+      model: document.getElementById("benchmarkModel"),
+      intelligenceProvider: document.getElementById("intelligenceProvider"),
+      intelligenceModel: document.getElementById("intelligenceModel"),
+      intelligenceBenchmarks: document.getElementById("intelligenceBenchmarks"),
+      thinkingMode: document.getElementById("thinkingMode"),
+      thinkingModeText: document.getElementById("thinkingModeText"),
+      runIntelligence: document.getElementById("runIntelligence"),
+      cancelIntelligenceInline: document.getElementById("cancelIntelligenceInline"),
+      intelligenceRuntime: document.getElementById("intelligenceRuntime"),
+      intelligenceBenchmarkCard: document.getElementById("intelligenceBenchmarkCard"),
+      toggleIntelligenceBenchmarks: document.getElementById("toggleIntelligenceBenchmarks"),
+      intelligenceProgressModel: document.getElementById("intelligenceProgressModel"),
+      intelligenceProgressLabel: document.getElementById("intelligenceProgressLabel"),
+      intelligenceProgressCount: document.getElementById("intelligenceProgressCount"),
+      intelligenceProgressFill: document.getElementById("intelligenceProgressFill"),
+      intelligenceProgressDetail: document.getElementById("intelligenceProgressDetail"),
+      intelligenceResultPanel: document.getElementById("intelligenceResultPanel"),
+      intelligenceResults: document.getElementById("intelligenceResults"),
+      run: document.getElementById("runBenchmark"),
+      cancel: document.getElementById("cancelBenchmark"),
+      progressPanel: document.getElementById("progressPanel"),
+      progressLabel: document.getElementById("progressLabel"),
+      progressCount: document.getElementById("progressCount"),
+      progressFill: document.getElementById("progressFill"),
+      single: document.getElementById("singleResult"),
+      batch: document.getElementById("batchResult")
+    };
+
+    function authHeaders(extraHeaders = {}) {
+      return { Accept: "application/json", ...extraHeaders };
+    }
+
+    function redirectToLogin() {
+      if (window.top && window.top !== window) {
+        window.top.postMessage({ type: "lbp-session-expired" }, window.location.origin);
+        return;
+      }
+      window.location.replace("login.html");
+    }
+
+    async function apiRequest(url, options = {}) {
+      const headers = authHeaders(options.headers || {});
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      const text = await response.text();
+      let payload = {};
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch (_err) {
+          payload = { message: text };
+        }
+      }
+      if (!response.ok) {
+        if (response.status === 401) {
+          redirectToLogin();
+        }
+        throw new Error(payload?.error?.message || payload?.detail || payload?.message || `API request failed: ${response.status}`);
+      }
+      return payload;
+    }
+
+    async function loadProviders() {
+      if (state.running || state.intelligenceRunning) {
+        return;
+      }
+      const [configs, health, catalog] = await Promise.all([
+        apiRequest("api/provider-configs"),
+        apiRequest("api/health"),
+        apiRequest("api/benchmarks/intelligence/catalog").catch(() => ({ groups: [] }))
+      ]);
+      state.providers = configs.providers || [];
+      state.status = health.providers || [];
+      state.intelligenceGroups = normalizeCatalogGroups(catalog.groups || []);
+      renderProviderOptions();
+      renderIntelligenceBenchmarks();
+      await refreshSelectedProviderModels();
+    }
+
+    function normalizeCatalogGroups(groups) {
+      return groups.map(group => ({
+        title: group.title || "",
+        items: (group.items || []).map(item => ({
+          id: item.id,
+          name: item.name || item.id,
+          desc: item.description || item.desc || "",
+          options: normalizeBenchmarkOptions(item.options || ["300", "Full"]),
+          requiresExecution: Boolean(item.requires_execution || item.requiresExecution)
+        })).filter(item => item.id)
+      })).filter(group => group.items.length > 0);
+    }
+
+    function normalizeBenchmarkOptions(options) {
+      const result = ["20", "50"];
+      for (const option of options || []) {
+        const value = String(option || "").trim();
+        if (value && !result.includes(value)) {
+          result.push(value);
+        }
+      }
+      return result;
+    }
+
+    function renderProviderOptions() {
+      const enabledProviders = state.providers.filter(provider => provider.enabled);
+      renderProviderSelect(els.provider, enabledProviders);
+      renderProviderSelect(els.intelligenceProvider, enabledProviders);
+      renderModelOptions();
+      renderIntelligenceModelOptions();
+    }
+
+    function renderProviderSelect(select, providers) {
+      const previous = select.value;
+      select.innerHTML = "";
+      providers.forEach(provider => {
+        const option = document.createElement("option");
+        option.value = provider.id;
+        option.textContent = provider.name || provider.id;
+        select.appendChild(option);
+      });
+      select.value = providers.some(provider => provider.id === previous) ? previous : (providers[0]?.id || "");
+      select.disabled = providers.length === 0;
+    }
+
+    async function fetchProviderModels(providerID) {
+      if (!providerID) {
+        return;
+      }
+      try {
+        const payload = await apiRequest(`api/provider-configs/${encodeURIComponent(providerID)}/models`);
+        if (payload.ok && Array.isArray(payload.models)) {
+          state.providerModels[providerID] = payload.models;
+        }
+      } catch (_err) {
+        state.providerModels[providerID] = null;
+      }
+    }
+
+    async function refreshProviderModels(providerID, select, afterRender = () => {}) {
+      if (!providerID) {
+        return;
+      }
+      renderModelSelect(providerID, select, { loading: true });
+      await fetchProviderModels(providerID);
+      renderModelSelect(providerID, select);
+      afterRender();
+    }
+
+    async function refreshSelectedProviderModels() {
+      const pairs = [
+        { id: els.provider.value, select: els.model },
+        { id: els.intelligenceProvider.value, select: els.intelligenceModel }
+      ].filter(pair => pair.id);
+      pairs.forEach(pair => renderModelSelect(pair.id, pair.select, { loading: true }));
+
+      const ids = [...new Set(pairs.map(pair => pair.id))];
+      await Promise.all(ids.map(id => fetchProviderModels(id)));
+
+      renderModelOptions();
+      renderIntelligenceModelOptions();
+    }
+
+    function renderModelOptions() {
+      renderModelSelect(els.provider.value, els.model);
+      els.run.disabled = state.running || !els.provider.value || !els.model.value;
+    }
+
+    function renderIntelligenceModelOptions() {
+      renderModelSelect(els.intelligenceProvider.value, els.intelligenceModel);
+      updateIntelligenceRunState();
+    }
+
+    function renderModelSelect(providerID, select, options = {}) {
+      const provider = state.providers.find(item => item.id === providerID);
+      const status = state.status.find(item => item.id === providerID);
+      const modelSet = new Set();
+      const apiModels = state.providerModels[providerID];
+      if (Array.isArray(apiModels)) {
+        apiModels.forEach(model => modelSet.add(model));
+      } else if (provider?.model) {
+        modelSet.add(provider.model);
+      } else if (Array.isArray(status?.models)) {
+        status.models.forEach(model => {
+          if (model?.name) modelSet.add(model.name);
+        });
+      }
+      const previous = select.value;
+      select.innerHTML = "";
+      if (options.loading) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "載入模型...";
+        select.appendChild(option);
+        select.disabled = true;
+        return;
+      }
+      [...modelSet].forEach(model => {
+        const option = document.createElement("option");
+        option.value = model;
+        option.textContent = model;
+        select.appendChild(option);
+      });
+      if (modelSet.has(previous)) {
+        select.value = previous;
+      }
+      select.disabled = modelSet.size === 0;
+    }
+
+    function selectedValues(selector) {
+      return [...document.querySelectorAll(`${selector} input:checked`)].map(input => Number(input.value));
+    }
+
+    function loadIntelligenceSettings() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(intelligenceStorageKey) || "{}");
+        if (Array.isArray(saved.selections)) {
+          state.intelligenceSelections = new Set(saved.selections.filter(Boolean));
+        }
+        state.intelligenceSamples = saved.samples && typeof saved.samples === "object" ? saved.samples : {};
+      } catch (_err) {
+        state.intelligenceSamples = {};
+      }
+      if (!state.intelligenceSamples) {
+        state.intelligenceSamples = {};
+      }
+    }
+
+    function saveIntelligenceSettings() {
+      localStorage.setItem(intelligenceStorageKey, JSON.stringify({
+        selections: [...state.intelligenceSelections],
+        samples: state.intelligenceSamples || {}
+      }));
+    }
+
+    function savedSampleFor(item) {
+      const saved = state.intelligenceSamples?.[item.id];
+      return item.options.includes(saved) ? saved : item.options[0];
+    }
+
+    function renderIntelligenceBenchmarks() {
+      els.intelligenceBenchmarks.innerHTML = activeIntelligenceGroups().map(group => `
+        <section class="benchmark-category">
+          <div class="category-title">${escapeHtml(group.title)} <span>(${group.items.length})</span></div>
+          <div class="benchmark-grid">
+            ${group.items.map(item => benchmarkCardHTML(item)).join("")}
+          </div>
+        </section>
+      `).join("");
+
+      els.intelligenceBenchmarks.querySelectorAll(".benchmark-card").forEach(card => {
+        card.addEventListener("click", event => {
+          if (event.target.closest("select")) {
+            return;
+          }
+          const id = card.dataset.id;
+          if (!id || card.classList.contains("disabled")) {
+            return;
+          }
+          if (state.intelligenceSelections.has(id)) {
+            state.intelligenceSelections.delete(id);
+          } else {
+            state.intelligenceSelections.add(id);
+          }
+          saveIntelligenceSettings();
+          renderIntelligenceBenchmarks();
+        });
+        card.addEventListener("keydown", event => {
+          if (event.key !== "Enter" && event.key !== " ") {
+            return;
+          }
+          event.preventDefault();
+          card.click();
+        });
+      });
+      els.intelligenceBenchmarks.querySelectorAll(".benchmark-card select").forEach(select => {
+        select.addEventListener("change", event => {
+          const id = event.target.closest(".benchmark-card")?.dataset.id;
+          if (!id) {
+            return;
+          }
+          state.intelligenceSamples[id] = event.target.value;
+          saveIntelligenceSettings();
+        });
+      });
+      updateIntelligenceRunState();
+    }
+
+    function activeIntelligenceGroups() {
+      return state.intelligenceGroups.length ? state.intelligenceGroups : intelligenceGroups;
+    }
+
+    function benchmarkCardHTML(item) {
+      const selected = state.intelligenceSelections.has(item.id);
+      const classes = ["benchmark-card", selected ? "selected" : "", item.disabled ? "disabled" : ""].filter(Boolean).join(" ");
+      const sample = savedSampleFor(item);
+      return `
+        <article class="${classes}" role="button" tabindex="${item.disabled ? "-1" : "0"}" data-id="${escapeHtml(item.id)}" ${item.disabled ? "aria-disabled=\"true\"" : ""}>
+          <div class="benchmark-name">${escapeHtml(item.name)}</div>
+          <div class="benchmark-desc">${escapeHtml(item.desc)}</div>
+          <select aria-label="${escapeHtml(item.name)} 題數" ${item.disabled ? "disabled" : ""}>
+            ${item.options.map(option => `<option${option === sample ? " selected" : ""}>${escapeHtml(option)}</option>`).join("")}
+          </select>
+          ${item.requiresExecution ? `<span class="benchmark-warning"><svg viewBox="0 0 24 24"><path d="m12 3 10 18H2L12 3Z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>程式碼執行</span>` : ""}
+        </article>
+      `;
+    }
+
+    function updateIntelligenceRunState() {
+      els.thinkingModeText.textContent = els.thinkingMode.checked ? "On" : "Off";
+      els.runIntelligence.disabled = state.intelligenceRunning || !els.intelligenceProvider.value || !els.intelligenceModel.value || state.intelligenceSelections.size === 0;
+      els.cancelIntelligenceInline.disabled = !state.intelligenceRunning;
+    }
+
+    function selectedIntelligenceBenchmarks() {
+      return activeIntelligenceGroups().flatMap(group => group.items)
+        .filter(item => state.intelligenceSelections.has(item.id))
+        .map(item => {
+          const card = [...els.intelligenceBenchmarks.querySelectorAll(".benchmark-card")].find(element => element.dataset.id === item.id);
+          const select = card?.querySelector("select");
+          const sample = select?.value || item.options[0] || "300";
+          return {
+            ...item,
+            sample,
+            total: sampleCount(sample)
+          };
+        });
+    }
+
+    function sampleCount(sample) {
+      const text = String(sample || "");
+      const matched = text.match(/\((\d+)\)/) || text.match(/^(\d+)/);
+      if (matched) {
+        return Number(matched[1]);
+      }
+      return 1000;
+    }
+
+    function sampleSizeForRequest(sample) {
+      const text = String(sample || "");
+      if (/full/i.test(text)) {
+        return 0;
+      }
+      const matched = text.match(/^(\d+)/) || text.match(/\((\d+)\)/);
+      return matched ? Number(matched[1]) : 300;
+    }
+
+    function intelligenceBatchSize() {
+      const selected = document.querySelector("input[name='intelligenceBatchSize']:checked");
+      return Number(selected?.value || 1);
+    }
+
+    async function runIntelligenceBenchmark() {
+      if (state.intelligenceRunning) {
+        return;
+      }
+
+      const selected = selectedIntelligenceBenchmarks();
+      if (!selected.length || !els.intelligenceModel.value) {
+        updateIntelligenceRunState();
+        return;
+      }
+
+      state.intelligenceRunning = true;
+      state.intelligenceJobId = "";
+      els.intelligenceRuntime.classList.add("active");
+      els.intelligenceResultPanel.hidden = true;
+      els.intelligenceResults.className = "empty";
+      els.intelligenceResults.textContent = "等待測試完成";
+      els.intelligenceProgressModel.textContent = els.intelligenceModel.value;
+      els.intelligenceProgressLabel.textContent = "建立測試工作";
+      els.intelligenceProgressCount.textContent = "0 / 0";
+      els.intelligenceProgressFill.style.width = "0%";
+      els.intelligenceProgressDetail.textContent = "等待後端建立佇列";
+      setInlineCancelLabel("取消");
+      updateIntelligenceRunState();
+
+      try {
+        const benchmarks = {};
+        selected.forEach(item => {
+          benchmarks[item.id] = sampleSizeForRequest(item.sample);
+        });
+
+        const job = await apiRequest("api/benchmarks/intelligence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            provider_id: els.intelligenceProvider.value,
+            model: els.intelligenceModel.value,
+            batch_size: intelligenceBatchSize(),
+            enable_thinking: els.thinkingMode.checked,
+            benchmarks
+          })
+        });
+        state.intelligenceJobId = job.id;
+        renderIntelligenceJob(job);
+        state.intelligenceTimer = window.setInterval(pollIntelligenceJob, 1000);
+      } catch (err) {
+        state.intelligenceRunning = false;
+        state.intelligenceJobId = "";
+        els.intelligenceProgressLabel.textContent = err.message || "建立測試失敗";
+        els.intelligenceProgressDetail.textContent = "請確認 Provider、模型與 API 連線狀態";
+        updateIntelligenceRunState();
+      }
+    }
+
+    async function pollIntelligenceJob() {
+      if (!state.intelligenceJobId) {
+        return;
+      }
+      try {
+        const job = await apiRequest(`api/benchmarks/intelligence/${encodeURIComponent(state.intelligenceJobId)}`);
+        renderIntelligenceJob(job);
+      } catch (err) {
+        finishIntelligenceBenchmark(err.message || "取得測試狀態失敗", false);
+      }
+    }
+
+    async function cancelIntelligenceBenchmark() {
+      if (!state.intelligenceRunning || !state.intelligenceJobId) {
+        return;
+      }
+      try {
+        const job = await apiRequest(`api/benchmarks/intelligence/${encodeURIComponent(state.intelligenceJobId)}/cancel`, { method: "POST" });
+        renderIntelligenceJob(job);
+      } catch (err) {
+        finishIntelligenceBenchmark(err.message || "取消失敗", false);
+      }
+    }
+
+    function renderIntelligenceJob(job) {
+      const progress = job.progress || {};
+      const status = job.status || "queued";
+      const current = Number(progress.current || 0);
+      const total = Number(progress.total || 0);
+      const benchmarkIndex = Number(progress.benchmark_index || 0);
+      const benchmarkTotal = Number(progress.benchmark_total || job.requested?.length || 0);
+
+      state.intelligenceRunning = status === "queued" || status === "running";
+      els.intelligenceRuntime.classList.add("active");
+      els.intelligenceProgressModel.textContent = job.model || els.intelligenceModel.value;
+      els.intelligenceProgressLabel.textContent = progress.label || statusLabel(status);
+      els.intelligenceProgressCount.textContent = `${current} / ${total}`;
+      els.intelligenceProgressFill.style.width = `${total ? Math.round((current / total) * 100) : 0}%`;
+      els.intelligenceProgressDetail.textContent = progress.benchmark_name
+        ? `${statusLabel(status)}: ${progress.benchmark_name} ・ ${Math.min(benchmarkIndex + 1, benchmarkTotal)} / ${benchmarkTotal} benchmarks`
+        : statusLabel(status);
+
+      if (status === "completed" || status === "cancelled" || status === "failed") {
+        finishIntelligenceBenchmark(statusLabel(status), status === "completed", job);
+        return;
+      }
+      updateIntelligenceRunState();
+    }
+
+    function finishIntelligenceBenchmark(label, completed, job = null) {
+      if (state.intelligenceTimer) {
+        window.clearInterval(state.intelligenceTimer);
+      }
+      state.intelligenceTimer = null;
+      state.intelligenceRunning = false;
+      els.intelligenceProgressLabel.textContent = label;
+      setInlineCancelLabel(completed ? "已完成" : label);
+      if (completed) {
+        els.intelligenceProgressFill.style.width = "100%";
+      }
+      if (job?.results?.length) {
+        renderIntelligenceResults(job.results);
+      }
+      updateIntelligenceRunState();
+    }
+
+    function statusLabel(status) {
+      switch (status) {
+        case "queued": return "佇列中";
+        case "running": return "執行中";
+        case "completed": return "已完成";
+        case "cancelled": return "已取消";
+        case "failed": return "失敗";
+        default: return status || "未知";
+      }
+    }
+
+    function renderIntelligenceResults(results) {
+      els.intelligenceResultPanel.hidden = false;
+      els.intelligenceResults.className = "table-wrap";
+      els.intelligenceResults.innerHTML = `
+        <table>
+          <thead><tr><th>基準</th><th>正確率</th><th>正確 / 題數</th><th>耗時</th></tr></thead>
+          <tbody>${results.map(row => `
+            <tr>
+              <td>${escapeHtml(row.benchmark_name || row.benchmark_id)}</td>
+              <td class="strong">${formatPercent(row.accuracy)}</td>
+              <td>${Number(row.correct_count || 0)} / ${Number(row.total_questions || 0)}</td>
+              <td>${formatDuration(row.duration_ms || 0)}</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    function setInlineCancelLabel(label) {
+      els.cancelIntelligenceInline.innerHTML = `<svg viewBox="0 0 24 24"><path d="M8 8h8v8H8Z"></path></svg>${escapeHtml(label)}`;
+    }
+
+    async function runBenchmark() {
+      if (state.running) return;
+      const providerID = els.provider.value;
+      const model = els.model.value;
+      const singles = selectedValues("#singleBenchmarks");
+      const batches = selectedValues("#batchBenchmarks");
+      const total = singles.length + batches.length;
+      if (!providerID || !model || total === 0) return;
+
+      state.running = true;
+      state.abortController = new AbortController();
+      els.run.disabled = true;
+      els.cancel.disabled = false;
+      els.cancel.textContent = "取消";
+      els.progressPanel.classList.add("active");
+      const singleRows = [];
+      const batchRows = [];
+      let done = 0;
+      let cancelled = false;
+      let failed = false;
+
+      try {
+        for (const promptTokens of singles) {
+          updateProgress(`Single: pp${promptTokens}/tg128`, done, total);
+          const result = await runChatBenchmark(providerID, model, promptTokens, 128, state.abortController.signal);
+          singleRows.push(result);
+          done++;
+          renderSingleRows(singleRows);
+          updateProgress(`Single: pp${promptTokens}/tg128`, done, total);
+        }
+
+        const baseline = singleRows.find(row => row.promptTokens === 1024) || singleRows[0] || null;
+        renderBatchRows(batchRows, baseline);
+        for (const batchSize of batches) {
+          updateProgress(`${batchSize}x batch: pp1024/tg128`, done, total);
+          const started = performance.now();
+          const results = await Promise.all(Array.from({ length: batchSize }, () => runChatBenchmark(providerID, model, 1024, 128, state.abortController.signal)));
+          const ended = performance.now();
+          batchRows.push(aggregateBatch(batchSize, results, started, ended, baseline));
+          done++;
+          renderBatchRows(batchRows, baseline);
+          updateProgress(`${batchSize}x batch: pp1024/tg128`, done, total);
+        }
+      } catch (err) {
+        if (err.name === "AbortError") {
+          cancelled = true;
+          els.progressLabel.textContent = "已取消";
+        } else {
+          failed = true;
+          els.progressLabel.textContent = err.message || "基準測試失敗";
+        }
+      } finally {
+        state.running = false;
+        state.abortController = null;
+        els.cancel.disabled = true;
+        els.cancel.textContent = cancelled ? "已取消" : failed ? "失敗" : "已完成";
+        renderModelOptions();
+      }
+    }
+
+    async function runChatBenchmark(providerID, model, promptTokens, maxTokens, signal) {
+      const started = performance.now();
+      const response = await fetch("v1/chat/completions", {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json", Accept: "text/event-stream" }),
+        credentials: "same-origin",
+        cache: "no-store",
+        body: JSON.stringify({
+          provider_id: providerID,
+          model,
+          stream: true,
+          stream_options: { include_usage: true },
+          benchmark_text_completion_fallback: true,
+          max_tokens: maxTokens,
+          messages: [{ role: "user", content: benchmarkPrompt(promptTokens) }]
+        }),
+        signal
+      });
+      if (!response.ok) {
+        if (response.status === 401) {
+          redirectToLogin();
+        }
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`Benchmark request failed: ${response.status}${errorText ? ` - ${errorText.slice(0, 240)}` : ""}`);
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let firstTokenAt = 0;
+      let lastTokenAt = 0;
+      let contentReadBatches = 0;
+      let text = "";
+      let usageTokens = 0;
+      let providerTimings = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const receivedAt = performance.now();
+        let batchHasContent = false;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          const parsed = parseSSELine(line);
+          if (!parsed) continue;
+          if (parsed === "[DONE]") continue;
+          const chunkText = chunkContent(parsed);
+          if (chunkText) {
+            if (firstTokenAt <= 0) firstTokenAt = receivedAt;
+            lastTokenAt = receivedAt;
+            batchHasContent = true;
+          }
+          text += chunkText;
+          usageTokens = Math.max(usageTokens, usageCompletionTokens(parsed));
+          providerTimings = mergeBenchmarkTimings(providerTimings, benchmarkTimings(parsed));
+        }
+        if (batchHasContent) contentReadBatches++;
+      }
+
+      const ended = performance.now();
+      const outputTokens = providerTimings?.outputTokens || usageTokens || estimateTokens(text);
+      const measuredPromptTokens = providerTimings?.promptTokens || promptTokens;
+      const ttftMS = firstTokenAt > 0 ? firstTokenAt - started : ended - started;
+      const totalMS = Math.max(ended - started, 1);
+      const observedGenerationMS = lastTokenAt > firstTokenAt ? lastTokenAt - firstTokenAt : 0;
+      const hasObservableTokenIntervals = contentReadBatches >= 2 && observedGenerationMS >= 1;
+      // 瀏覽器或反向代理可能一次送達整批 SSE。此時無法從前端量出 Token 間隔，
+      // 使用端到端時間保守估算，避免把 1 ms 誤認成完整生成時間。
+      const fallbackGenerationMS = hasObservableTokenIntervals ? observedGenerationMS : totalMS;
+      const fallbackGenerationTokens = hasObservableTokenIntervals ? Math.max(outputTokens - 1, 1) : outputTokens;
+      const nativeGenerationMS = providerTimings?.generationMS || 0;
+      const nativeGenerationTPS = providerTimings?.generationTPS || 0;
+      const generationMS = nativeGenerationMS || fallbackGenerationMS;
+      const generationTokens = nativeGenerationMS || nativeGenerationTPS ? outputTokens : fallbackGenerationTokens;
+      const tgTPS = nativeGenerationTPS || (generationTokens > 0 ? generationTokens / (generationMS / 1000) : 0);
+      const tpotMS = nativeGenerationMS > 0 && generationTokens > 0
+        ? nativeGenerationMS / generationTokens
+        : nativeGenerationTPS > 0
+          ? 1000 / nativeGenerationTPS
+          : generationTokens > 0
+            ? generationMS / generationTokens
+            : 0;
+      const nativePromptMS = providerTimings?.promptMS || 0;
+      const nativePromptTPS = providerTimings?.promptTPS || 0;
+      const promptMS = nativePromptMS || ttftMS;
+      const ppTPS = nativePromptTPS
+        || (nativePromptMS > 0 ? measuredPromptTokens / (nativePromptMS / 1000) : 0)
+        || measuredPromptTokens / Math.max(ttftMS / 1000, 0.001);
+      return {
+        label: `pp${promptTokens}/tg${maxTokens}`,
+        promptTokens,
+        measuredPromptTokens,
+        outputTokens,
+        ttftMS,
+        promptMS,
+        tpotMS,
+        ppTPS,
+        tgTPS,
+        throughput: (measuredPromptTokens + outputTokens) / (totalMS / 1000),
+        totalSeconds: totalMS / 1000,
+        memoryGB: 0
+      };
+    }
+
+    function parseSSELine(line) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) return null;
+      const data = trimmed.slice(5).trim();
+      if (!data || data === "[DONE]") return "[DONE]";
+      try { return JSON.parse(data); } catch (_err) { return null; }
+    }
+
+    function chunkContent(payload) {
+      let content = "";
+      for (const choice of payload.choices || []) {
+        const delta = choice.delta || {};
+        const message = choice.message || {};
+        content += delta.content || delta.reasoning_content || delta.reasoning || "";
+        content += message.content || message.reasoning_content || message.reasoning || "";
+        content += choice.text || "";
+      }
+      return content;
+    }
+
+    function benchmarkTimings(payload) {
+      const timings = payload?.timings || payload?.usage?.timings;
+      if (!timings || typeof timings !== "object") return null;
+      const positiveNumber = value => {
+        const number = Number(value || 0);
+        return Number.isFinite(number) && number > 0 ? number : 0;
+      };
+      const result = {
+        promptTokens: positiveNumber(timings.prompt_n || timings.prompt_tokens),
+        outputTokens: positiveNumber(timings.predicted_n || timings.completion_tokens || timings.output_tokens),
+        promptMS: positiveNumber(timings.prompt_ms),
+        generationMS: positiveNumber(timings.predicted_ms || timings.generation_ms || timings.decode_ms),
+        promptTPS: positiveNumber(timings.prompt_per_second),
+        generationTPS: positiveNumber(timings.predicted_per_second || timings.generation_tokens_per_second || timings.tokens_per_second)
+      };
+      return Object.values(result).some(value => value > 0) ? result : null;
+    }
+
+    function mergeBenchmarkTimings(current, incoming) {
+      if (!incoming) return current;
+      const merged = { ...(current || {}) };
+      Object.entries(incoming).forEach(([key, value]) => {
+        if (value > 0) merged[key] = value;
+      });
+      return merged;
+    }
+
+    function usageCompletionTokens(payload) {
+      const usage = payload.usage || {};
+      const completion = Number(usage.completion_tokens || usage.output_tokens || 0);
+      if (completion > 0) return completion;
+      const details = usage.completion_tokens_details || usage.output_tokens_details || {};
+      const reasoning = Number(usage.reasoning_tokens || usage.reasoning_output_tokens || details.reasoning_tokens || 0);
+      return reasoning;
+    }
+
+    function aggregateBatch(batchSize, results, started, ended, baseline) {
+      const totalOutput = results.reduce((sum, item) => sum + item.outputTokens, 0);
+      const totalPrompt = results.reduce((sum, item) => sum + (item.measuredPromptTokens || item.promptTokens), 0);
+      const totalSeconds = Math.max((ended - started) / 1000, 0.001);
+      // Concurrent prompt processing completes when the slowest request finishes
+      // prefill. Do not include the subsequent output generation phase in pp TPS.
+      const promptSeconds = Math.max(
+        ...results.map(item => Number(item.promptMS || item.ttftMS || 0) / 1000),
+        0.001
+      );
+      const ppTPS = totalPrompt / promptSeconds;
+      const tgTPS = totalOutput / totalSeconds;
+      return {
+        batchSize,
+        tgTPS,
+        speedup: baseline?.tgTPS ? tgTPS / baseline.tgTPS : 1,
+        ppTPS,
+        ppTPSPerRequest: ppTPS / batchSize,
+        avgTTFT: average(results.map(item => item.ttftMS)),
+        totalSeconds
+      };
+    }
+
+    function renderSingleRows(rows) {
+      els.single.className = "table-wrap";
+      els.single.innerHTML = `
+        <table>
+          <thead><tr><th>測試</th><th>TTFT (ms)</th><th>TPOT (ms/tok)</th><th>pp TPS</th><th>tg TPS</th><th>端到端延遲</th><th>吞吐量</th><th>峰值記憶體</th></tr></thead>
+          <tbody>${rows.map(row => `
+            <tr>
+              <td>${row.label}</td>
+              <td>${row.ttftMS.toFixed(1)}</td>
+              <td>${row.tpotMS.toFixed(2)}</td>
+              <td>${formatNumber(row.ppTPS)} tok/s</td>
+              <td class="strong tps-value">${formatNumber(row.tgTPS)} tok/s</td>
+              <td>${row.totalSeconds.toFixed(3)}s</td>
+              <td>${formatNumber(row.throughput)} tok/s</td>
+              <td>${row.memoryGB ? row.memoryGB.toFixed(2) : "-"} GB</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    function baselineBatchRow(baseline) {
+      if (!baseline) {
+        return null;
+      }
+      return {
+        batchSize: "1x（基準線）",
+        tgTPS: baseline.tgTPS,
+        speedup: 1,
+        ppTPS: baseline.ppTPS,
+        ppTPSPerRequest: baseline.ppTPS,
+        avgTTFT: baseline.ttftMS,
+        totalSeconds: baseline.totalSeconds,
+        baseline: true
+      };
+    }
+
+    function renderBatchRows(rows, baseline = null) {
+      const baselineRow = baselineBatchRow(baseline);
+      const tableRows = baselineRow ? [baselineRow, ...rows] : rows;
+      els.batch.className = "table-wrap";
+      els.batch.innerHTML = `
+        <table>
+          <thead><tr><th>批次大小</th><th>tg TPS</th><th>加速比</th><th>pp TPS</th><th>pp TPS/請求</th><th>平均 TTFT (ms)</th><th>端到端延遲</th></tr></thead>
+          <tbody>${tableRows.map(row => `
+            <tr class="${row.baseline ? "baseline-row" : ""}">
+              <td>${typeof row.batchSize === "number" ? `${row.batchSize}x` : row.batchSize}</td>
+              <td class="strong tps-value">${formatNumber(row.tgTPS)} tok/s</td>
+              <td class="good">${row.speedup.toFixed(2)}x</td>
+              <td>${formatNumber(row.ppTPS)} tok/s</td>
+              <td>${formatNumber(row.ppTPSPerRequest)} tok/s</td>
+              <td>${row.avgTTFT.toFixed(1)}</td>
+              <td>${row.totalSeconds.toFixed(3)}s</td>
+            </tr>`).join("")}</tbody>
+        </table>`;
+    }
+
+    function updateProgress(label, done, total) {
+      els.progressLabel.textContent = label;
+      els.progressCount.textContent = `${done} / ${total}`;
+      els.progressFill.style.width = `${total ? Math.round((done / total) * 100) : 0}%`;
+    }
+
+    function benchmarkPrompt(targetTokens) {
+      const seed = "請根據以下內容進行摘要並回答重點。這是一段用於測量 prompt processing 的固定文本，內容本身不具備業務含義。";
+      const approxChars = Math.max(128, targetTokens * 2);
+      return Array(Math.ceil(approxChars / seed.length)).fill(seed).join("\n").slice(0, approxChars);
+    }
+
+    function estimateTokens(text) {
+      const chinese = [...text].filter(char => /[\u4e00-\u9fff]/.test(char)).length;
+      const other = text.replace(/[\u4e00-\u9fff\s]/g, "").length;
+      return Math.max(1, Math.ceil(chinese / 1.5 + other / 4));
+    }
+
+    function average(values) {
+      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+    }
+
+    function formatNumber(value) {
+      if (!Number.isFinite(value)) return "0";
+      if (value >= 100) return Math.round(value).toLocaleString(window.LBPI18n?.locale() || "zh-TW");
+      return value.toFixed(1);
+    }
+
+    function formatPercent(value) {
+      const number = Number(value || 0);
+      return `${(number * 100).toFixed(1)}%`;
+    }
+
+    function formatDuration(ms) {
+      const totalSeconds = Math.round(Number(ms || 0) / 1000);
+      const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, "0");
+      const seconds = String(totalSeconds % 60).padStart(2, "0");
+      return `${minutes} 分 ${seconds} 秒`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    document.querySelectorAll("[data-tab]").forEach(tab => {
+      tab.addEventListener("click", () => {
+        document.querySelectorAll("[data-tab]").forEach(item => item.classList.toggle("active", item === tab));
+        document.getElementById("performanceView").classList.toggle("active", tab.dataset.tab === "performance");
+        document.getElementById("intelligenceView").classList.toggle("active", tab.dataset.tab === "intelligence");
+      });
+    });
+    els.provider.addEventListener("change", () => refreshProviderModels(els.provider.value, els.model, renderModelOptions));
+    els.intelligenceProvider.addEventListener("change", () => refreshProviderModels(els.intelligenceProvider.value, els.intelligenceModel, renderIntelligenceModelOptions));
+    els.intelligenceModel.addEventListener("change", updateIntelligenceRunState);
+    els.thinkingMode.addEventListener("change", updateIntelligenceRunState);
+    els.runIntelligence.addEventListener("click", runIntelligenceBenchmark);
+    els.cancelIntelligenceInline.addEventListener("click", cancelIntelligenceBenchmark);
+    els.toggleIntelligenceBenchmarks.addEventListener("click", () => {
+      const collapsed = els.intelligenceBenchmarkCard.classList.toggle("collapsed");
+      els.toggleIntelligenceBenchmarks.setAttribute("aria-expanded", String(!collapsed));
+    });
+    els.run.addEventListener("click", runBenchmark);
+    els.cancel.addEventListener("click", () => state.abortController?.abort());
+    loadIntelligenceSettings();
+    loadProviders().catch(err => {
+      els.single.textContent = err.message || "無法載入 Provider";
+      els.run.disabled = true;
+    });
+    window.addEventListener("focus", () => {
+      loadProviders().catch(() => {});
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>金鑰管理</title>
+  <script src="i18n.js"></script>
+  <style>
+    :root {
+      --bg: #f7f8fa;
+      --panel: #fff;
+      --line: #dde3ea;
+      --line-strong: #c8d1dc;
+      --text: #1f2933;
+      --muted: #617080;
+      --primary: #171717;
+      --success: #2f855f;
+      --success-soft: #e4f3ec;
+      --danger: #b44832;
+      --danger-soft: #fff3ef;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); scrollbar-width: none; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar, .table-scroll::-webkit-scrollbar { display: none; }
+    button, input, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+
+    .page { max-width: 1320px; margin: 0 auto; padding: 22px; }
+    .page-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+    .title-group { display: grid; gap: 4px; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 18px; }
+    .muted { color: var(--muted); font-size: 13px; }
+
+    .button, .icon-button {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--text);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      font-weight: 700;
+    }
+    .button { padding: 0 16px; }
+    .icon-button { width: 40px; height: 40px; flex: 0 0 40px; padding: 0; }
+    .button:hover, .icon-button:hover { border-color: var(--line-strong); background: #f8fafc; }
+    .button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    .button.danger, .icon-button.danger { color: var(--danger); border-color: #e5bdb4; background: #fff; }
+    .icon-button svg, .button svg { width: 18px; height: 18px; stroke-width: 1.9; }
+
+    .tabs { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 8px; background: #f1f3f5; margin-bottom: 14px; }
+    .tab { min-height: 36px; padding: 0 15px; border: 0; border-radius: 6px; background: transparent; font-weight: 750; color: var(--muted); }
+    .tab.active { background: var(--primary); color: #fff; }
+
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; }
+    .issue-card { padding: 16px; }
+    .issue-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: end; }
+    .field { display: grid; gap: 7px; min-width: 0; }
+    .field > span { font-size: 13px; font-weight: 750; }
+    .input, .select { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 7px; background: #fff; padding: 0 12px; color: var(--text); }
+    .input:focus, .select:focus { outline: 2px solid rgba(47, 127, 88, .16); border-color: var(--success); }
+    .generated { display: none; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 13px; border: 1px solid #bddfcd; border-radius: 7px; background: #f3fbf7; }
+    .generated.active { display: flex; }
+    .generated code { overflow-wrap: anywhere; font-size: 13px; }
+
+    .status { min-height: 20px; margin: 0 2px 8px; color: var(--muted); font-size: 13px; }
+    .status.error { color: var(--danger); }
+    .status.success { color: var(--success); }
+
+    .table-card { overflow: hidden; }
+    .table-toolbar { min-height: 64px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+    .filter { min-width: 210px; max-width: 320px; }
+    .pagination { display: flex; align-items: center; gap: 12px; }
+    .page-status { min-width: 50px; text-align: center; font-size: 13px; font-weight: 800; }
+    .table-scroll { overflow: auto; scrollbar-width: none; }
+    table { width: 100%; min-width: 1040px; border-collapse: collapse; table-layout: fixed; }
+    th, td { padding: 14px 12px; border-bottom: 1px solid #e6e9ed; text-align: left; vertical-align: middle; font-size: 13px; }
+    th { color: var(--muted); font-size: 12px; background: #fbfbfc; }
+    tbody tr:last-child td { border-bottom: 0; }
+    .col-name { width: 17%; }
+    .col-key { width: 18%; }
+    .col-route { width: 16%; }
+    .col-status { width: 8%; }
+    .col-usage { width: 9%; }
+    .col-created { width: 12%; }
+    /* 4 顆 40px 按鈕 + 3 個 7px 間距 + 儲存格左右 padding = 205px；20% 於最小寬度 1040px 時為 208px，剛好不壓縮。 */
+    .col-actions { width: 20%; }
+    .name { font-weight: 800; overflow-wrap: anywhere; }
+    .masked { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .route-summary { display: grid; gap: 3px; min-width: 0; overflow-wrap: anywhere; color: var(--muted); font-size: 12px; }
+    .route-summary strong { color: var(--text); font-weight: 750; }
+    .badge { display: inline-flex; align-items: center; justify-content: center; min-height: 28px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 800; }
+    .badge.enabled { color: var(--success); background: var(--success-soft); }
+    .badge.disabled { color: var(--muted); background: #edf0f3; }
+    .actions { display: flex; align-items: center; justify-content: flex-end; gap: 7px; }
+    .sort-button { border: 0; padding: 0; background: transparent; color: inherit; font-weight: inherit; display: inline-flex; align-items: center; gap: 5px; }
+    .empty { padding: 48px 20px; color: var(--muted); text-align: center; }
+
+    .modal-backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px; background: rgba(17, 24, 39, .42); }
+    .modal-backdrop[hidden] { display: none; }
+    .modal { width: min(640px, 100%); max-height: calc(100vh - 40px); overflow: auto; scrollbar-width: none; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 20px 60px rgba(0,0,0,.18); }
+    .modal::-webkit-scrollbar { display: none; }
+    .modal.wide { width: min(840px, 100%); }
+    .modal-header, .modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px; }
+    .modal-header { border-bottom: 1px solid var(--line); }
+    .modal-footer { border-top: 1px solid var(--line); justify-content: flex-end; }
+    .modal-body { padding: 18px; }
+    .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .modal-grid .full { grid-column: 1 / -1; }
+    .policy-note { margin-top: 12px; color: var(--muted); font-size: 12px; line-height: 1.55; }
+    .month-nav { display: grid; grid-template-columns: 40px 1fr 40px; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .month-label { text-align: center; font-weight: 800; }
+    .chart-wrap { height: 340px; }
+
+    .loading { z-index: 80; }
+    .loading-box { min-width: 220px; display: grid; justify-items: center; gap: 13px; padding: 24px; background: #fff; border-radius: 8px; border: 1px solid var(--line); }
+    .spinner { width: 28px; height: 28px; border: 3px solid #dfe4e9; border-top-color: var(--primary); border-radius: 50%; animation: spin .75s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 720px) {
+      .page { padding: 14px; }
+      .page-header { align-items: flex-start; }
+      .issue-row, .modal-grid { grid-template-columns: 1fr; }
+      .modal-grid .full { grid-column: auto; }
+      .issue-row .button { width: 100%; }
+      .table-toolbar { align-items: stretch; flex-direction: column; }
+      .filter { max-width: none; }
+      .pagination { justify-content: flex-end; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="page-header">
+      <div class="title-group">
+        <h1>金鑰管理</h1>
+        <p class="muted">分別核發 Chat 與 MCP 專用金鑰；兩種金鑰不可交叉呼叫。</p>
+      </div>
+      <button class="button" type="button" id="reloadButton"><i data-lucide="refresh-cw"></i>重新載入</button>
+    </header>
+
+    <div class="tabs" role="tablist" aria-label="金鑰類型">
+      <button class="tab active" type="button" data-tab="chat">Chat 金鑰</button>
+      <button class="tab" type="button" data-tab="mcp">MCP 金鑰</button>
+      <button class="tab" type="button" data-tab="login">登入金鑰</button>
+    </div>
+    <div class="status" id="statusMessage">正在載入金鑰資料...</div>
+
+    <section class="card issue-card" id="issueCard">
+      <div class="issue-row">
+        <label class="field">
+          <span id="newKeyLabel">Chat API Key 名稱</span>
+          <input class="input" id="newKeyName" type="text" autocomplete="off" placeholder="例如：外部服務、內部測試">
+        </label>
+        <button class="button primary" type="button" id="createButton"><i data-lucide="key-round"></i><span id="createButtonLabel">核發 Chat API Key</span></button>
+      </div>
+      <div class="generated" id="generatedBox">
+        <div>
+          <strong>新的 API Key 只會顯示一次</strong><br>
+          <code id="generatedValue"></code>
+        </div>
+        <button class="icon-button" type="button" id="copyGeneratedButton" title="複製 API Key" aria-label="複製 API Key"><i data-lucide="copy"></i></button>
+      </div>
+    </section>
+
+    <section class="card table-card">
+      <div class="table-toolbar">
+        <select class="select filter" id="nameFilter" aria-label="依名稱類型過濾"><option value="all">全部名稱</option></select>
+        <div class="pagination">
+          <button class="icon-button" type="button" id="prevPage" title="上一頁" aria-label="上一頁"><i data-lucide="chevron-left"></i></button>
+          <span class="page-status" id="pageStatus">1 / 1</span>
+          <button class="icon-button" type="button" id="nextPage" title="下一頁" aria-label="下一頁"><i data-lucide="chevron-right"></i></button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name"><button class="sort-button" type="button" data-sort="name">名稱 <span data-sort-mark="name"></span></button></th>
+              <th class="col-key">金鑰</th>
+              <th class="col-route">強制路由</th>
+              <th class="col-status">狀態</th>
+              <th class="col-usage" id="usageHeader"><button class="sort-button" type="button" data-sort="usage">使用次數 <span data-sort-mark="usage"></span></button></th>
+              <th class="col-created"><button class="sort-button" type="button" data-sort="created">建立時間 <span data-sort-mark="created"></span></button></th>
+              <th class="col-actions"></th>
+            </tr>
+          </thead>
+          <tbody id="keyRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="modal-backdrop" id="editModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+      <header class="modal-header"><h2 id="editTitle">修改金鑰</h2><button class="icon-button" type="button" data-close="edit" aria-label="關閉"><i data-lucide="x"></i></button></header>
+      <div class="modal-body">
+        <div class="modal-grid">
+          <label class="field full"><span>名稱</span><input class="input" id="editName" type="text" autocomplete="off"></label>
+          <label class="field policy-field"><span>Provider</span><select class="select" id="editProvider"></select></label>
+          <label class="field policy-field"><span>模型</span><select class="select" id="editModel"></select></label>
+          <label class="field policy-field"><span>推理程度</span><select class="select" id="editEffort"></select></label>
+        </div>
+        <p class="policy-note" id="editPolicyNote">AUTO 代表強制回到負載平衡的自動選擇；指定值會覆寫呼叫端送入的 Provider、模型或推理程度。</p>
+      </div>
+      <footer class="modal-footer"><button class="button" type="button" data-close="edit">取消</button><button class="button primary" type="button" id="saveEditButton">儲存</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="confirmModal" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <header class="modal-header"><h2 id="confirmTitle">確認操作</h2></header>
+      <div class="modal-body"><p id="confirmMessage"></p></div>
+      <footer class="modal-footer"><button class="button" type="button" data-close="confirm">取消</button><button class="button danger" type="button" id="confirmButton">確認</button></footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="statsModal" hidden>
+    <section class="modal wide" role="dialog" aria-modal="true" aria-labelledby="statsTitle">
+      <header class="modal-header"><div><h2 id="statsTitle">API Key 使用統計</h2><p class="muted" id="statsSubtitle"></p></div><button class="icon-button" type="button" data-close="stats" aria-label="關閉"><i data-lucide="x"></i></button></header>
+      <div class="modal-body">
+        <div class="month-nav">
+          <button class="icon-button" type="button" id="prevMonth" aria-label="上個月"><i data-lucide="chevron-left"></i></button>
+          <div class="month-label" id="monthLabel"></div>
+          <button class="icon-button" type="button" id="nextMonth" aria-label="下個月"><i data-lucide="chevron-right"></i></button>
+        </div>
+        <div class="chart-wrap"><canvas id="usageChart"></canvas></div>
+        <p class="status" id="statsMessage"></p>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal-backdrop loading" id="loadingModal">
+    <div class="loading-box"><div class="spinner"></div><strong id="loadingText">正在載入...</strong></div>
+  </div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script>
+    const state = {
+      keys: [],
+      routing: { providers: [], models: [], reasoning_efforts: ["AUTO", "none", "minimal", "low", "medium", "high", "xhigh"] },
+      tab: localStorage.getItem("lbp.keys.tab") || "chat",
+      page: 1,
+      pageSize: 10,
+      filter: localStorage.getItem("lbp.keys.filter") || "all",
+      sortField: localStorage.getItem("lbp.keys.sortField") || "name",
+      sortDirection: localStorage.getItem("lbp.keys.sortDirection") || "asc",
+      editID: "",
+      confirmAction: null,
+      statsID: "",
+      statsMonth: currentMonth(),
+      chart: null
+    };
+
+    const els = Object.fromEntries([
+      "reloadButton", "statusMessage", "issueCard", "newKeyName", "createButton", "generatedBox", "generatedValue", "copyGeneratedButton",
+      "newKeyLabel", "createButtonLabel",
+      "nameFilter", "prevPage", "nextPage", "pageStatus", "keyRows", "usageHeader", "editModal", "editName", "editProvider", "editModel", "editEffort",
+      "editPolicyNote", "saveEditButton", "confirmModal", "confirmTitle", "confirmMessage", "confirmButton", "statsModal", "statsTitle",
+      "statsSubtitle", "prevMonth", "nextMonth", "monthLabel", "usageChart", "statsMessage", "loadingModal", "loadingText"
+    ].map(id => [id, document.getElementById(id)]));
+
+    if (!["chat", "mcp", "login"].includes(state.tab)) state.tab = "chat";
+
+    function refreshIcons() { window.lucide?.createIcons({ attrs: { "aria-hidden": "true" } }); }
+    function escapeHTML(value) { return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#039;"); }
+    function normalizeAuto(value) { const text = String(value || "").trim(); return !text || text.toUpperCase() === "AUTO" ? "AUTO" : text; }
+    function showLoading(text = "正在載入...") { els.loadingText.textContent = text; els.loadingModal.hidden = false; }
+    function hideLoading() { els.loadingModal.hidden = true; }
+    function setStatus(message, type = "") { els.statusMessage.textContent = message; els.statusMessage.className = `status ${type}`.trim(); }
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, { credentials: "same-origin", ...options, headers: { ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) } });
+      const text = await response.text();
+      let payload = {};
+      if (text) { try { payload = JSON.parse(text); } catch { payload = { message: text }; } }
+      if (response.status === 401) {
+        if (window.parent && window.parent !== window) {
+          window.parent.postMessage({ type: "lbp-session-expired" }, window.location.origin);
+        } else {
+          window.location.replace("login.html");
+        }
+        throw new Error("登入已失效，請重新登入。");
+      }
+      if (!response.ok) throw new Error(payload?.error?.message || payload?.message || `HTTP ${response.status}`);
+      return payload;
+    }
+
+    async function loadAll() {
+      showLoading("正在載入金鑰與路由選項...");
+      try {
+        const [keysPayload, routingPayload] = await Promise.all([api("api/api-keys"), api("api/api-key-routing-options")]);
+        state.keys = Array.isArray(keysPayload.keys) ? keysPayload.keys : [];
+        state.routing = routingPayload || state.routing;
+        populateNameFilter();
+        render();
+        setStatus("金鑰資料已載入。", "success");
+      } catch (error) {
+        setStatus(error.message, "error");
+      } finally { hideLoading(); }
+    }
+
+    function visibleKeys() {
+      let items = state.keys.filter(key => keyType(key) === state.tab);
+      if (state.filter !== "all") items = items.filter(key => nameGroup(key.name) === state.filter);
+      const direction = state.sortDirection === "desc" ? -1 : 1;
+      return items.sort((left, right) => {
+        if (state.sortField === "usage") return (Number(left.usage_count || 0) - Number(right.usage_count || 0)) * direction;
+        if (state.sortField === "created") return (Date.parse(left.created_at || 0) - Date.parse(right.created_at || 0)) * direction;
+        return String(left.name || "").localeCompare(String(right.name || ""), window.LBPI18n?.locale() || "zh-TW") * direction;
+      });
+    }
+
+    function render() {
+      document.querySelectorAll("[data-tab]").forEach(button => {
+        const active = button.dataset.tab === state.tab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      els.issueCard.hidden = state.tab === "login";
+      const isMCP = state.tab === "mcp";
+      els.usageHeader.hidden = isMCP;
+      if (isMCP && state.sortField === "usage") {
+        state.sortField = "name";
+        state.sortDirection = "asc";
+        localStorage.setItem("lbp.keys.sortField", state.sortField);
+        localStorage.setItem("lbp.keys.sortDirection", state.sortDirection);
+      }
+      els.newKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "Chat API Key 名稱";
+      els.newKeyName.placeholder = isMCP ? "例如：Codex、Claude Desktop" : "例如：外部服務、內部測試";
+      els.createButtonLabel.textContent = isMCP ? "核發 MCP Key" : "核發 Chat API Key";
+      const items = visibleKeys();
+      const pages = Math.max(1, Math.ceil(items.length / state.pageSize));
+      state.page = Math.min(Math.max(1, state.page), pages);
+      els.pageStatus.textContent = `${state.page} / ${pages}`;
+      els.prevPage.disabled = state.page <= 1;
+      els.nextPage.disabled = state.page >= pages;
+      const pageItems = items.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
+      els.keyRows.innerHTML = pageItems.length ? pageItems.map(keyRow).join("") : `<tr><td colspan="${isMCP ? 6 : 7}"><div class="empty">尚無可顯示的金鑰</div></td></tr>`;
+      document.querySelectorAll("[data-sort-mark]").forEach(mark => mark.textContent = mark.dataset.sortMark === state.sortField ? (state.sortDirection === "asc" ? "↑" : "↓") : "");
+      refreshIcons();
+    }
+
+    function keyRow(key) {
+      const provider = normalizeAuto(key.provider_id);
+      const model = normalizeAuto(key.model);
+      const effort = normalizeAuto(key.reasoning_effort);
+      const route = key.temporary
+        ? `<div class="route-summary"><strong>Web Session</strong><span>不套用 Chat 路由策略</span></div>`
+        : keyType(key) === "mcp"
+          ? `<div class="route-summary"><strong>MCP</strong><span>僅可呼叫 MCP 端點</span></div>`
+          : `<div class="route-summary"><strong>${escapeHTML(providerName(provider))}</strong><span>${escapeHTML(model)} · ${escapeHTML(effort)}</span></div>`;
+      const supportsStatistics = keyType(key) !== "mcp";
+      return `<tr>
+        <td><div class="name">${escapeHTML(key.name)}</div></td>
+        <td><code class="masked" title="${escapeHTML(key.masked_key)}">${escapeHTML(key.masked_key)}</code></td>
+        <td>${route}</td>
+        <td><span class="badge ${key.enabled ? "enabled" : "disabled"}">${key.enabled ? "啟用" : "停用"}</span></td>
+        ${supportsStatistics ? `<td>${formatCount(key.usage_count)}</td>` : ""}
+        <td>${formatDate(key.created_at)}</td>
+        <td><div class="actions">
+          <button class="icon-button" type="button" data-action="edit" data-id="${escapeHTML(key.id)}" title="修改" aria-label="修改"><i data-lucide="pencil"></i></button>
+          ${supportsStatistics ? `<button class="icon-button" type="button" data-action="stats" data-id="${escapeHTML(key.id)}" title="統計" aria-label="統計"><i data-lucide="chart-line"></i></button>` : ""}
+          <button class="icon-button" type="button" data-action="toggle" data-id="${escapeHTML(key.id)}" title="${key.enabled ? "停用" : "啟用"}" aria-label="${key.enabled ? "停用" : "啟用"}"><i data-lucide="${key.enabled ? "pause" : "play"}"></i></button>
+          <button class="icon-button danger" type="button" data-action="delete" data-id="${escapeHTML(key.id)}" title="刪除" aria-label="刪除"><i data-lucide="trash-2"></i></button>
+        </div></td>
+      </tr>`;
+    }
+
+    function providerName(id) {
+      if (String(id).toUpperCase() === "AUTO") return "AUTO";
+      const provider = (state.routing.providers || []).find(item => item.id === id);
+      return provider ? `${provider.name}${provider.enabled ? "" : "（已停用）"}` : id;
+    }
+    function formatCount(value) { const count = Number(value || 0); return count >= 1000 ? `${(count / 1000).toFixed(1)}K` : String(count); }
+    function formatDate(value) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString(window.LBPI18n?.locale() || "zh-TW", { hour12: false }).replace(" ", "\n"); }
+    function nameGroup(name) { const text = String(name || "").trim(); const slash = text.indexOf("/"); return slash > 0 ? text.slice(0, slash) : "其他"; }
+    function keyType(key) {
+      if (key?.temporary) return "login";
+      return String(key?.key_type || "").toLowerCase() === "mcp" ? "mcp" : "chat";
+    }
+
+    function populateNameFilter() {
+      const groups = [...new Set(state.keys.filter(key => keyType(key) === state.tab).map(key => nameGroup(key.name)))].sort((a, b) => a.localeCompare(b, window.LBPI18n?.locale() || "zh-TW"));
+      if (state.filter !== "all" && !groups.includes(state.filter)) state.filter = "all";
+      els.nameFilter.innerHTML = `<option value="all">全部名稱</option>${groups.map(group => `<option value="${escapeHTML(group)}">${escapeHTML(group)}</option>`).join("")}`;
+      els.nameFilter.value = state.filter;
+    }
+
+    async function createKey() {
+      const name = els.newKeyName.value.trim();
+      const isMCP = state.tab === "mcp";
+      if (!name) { setStatus(isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 Chat API Key 名稱。", "error"); els.newKeyName.focus(); return; }
+      showLoading("正在核發金鑰...");
+      try {
+        const payload = await api("api/api-keys", { method: "POST", body: JSON.stringify({ name, type: isMCP ? "mcp" : "chat" }) });
+        state.keys.push(payload.key);
+        els.generatedValue.textContent = payload.key.key || "";
+        els.generatedBox.classList.add("active");
+        els.newKeyName.value = "";
+        render();
+        setStatus(isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "Chat API Key 已核發，路由策略預設為 AUTO。", "success");
+      } catch (error) { setStatus(error.message, "error"); } finally { hideLoading(); }
+    }
+
+    function openEdit(id) {
+      const key = state.keys.find(item => item.id === id);
+      if (!key) return;
+      state.editID = id;
+      els.editName.value = key.name || "";
+      const fields = document.querySelectorAll(".policy-field");
+      const type = keyType(key);
+      fields.forEach(field => field.hidden = type !== "chat");
+      els.editPolicyNote.textContent = type === "login"
+        ? "登入金鑰只供 Web Session 使用，不套用 Chat 路由策略。"
+        : type === "mcp"
+          ? "MCP 金鑰只供 MCP 端點使用，不套用 Chat 路由策略，也不收集使用統計。"
+          : "AUTO 不覆寫呼叫端設定；未指定時由負載平衡自動選擇。指定值則會強制覆寫呼叫端送入的 Provider、模型或推理程度。";
+      populateProviderSelect(normalizeAuto(key.provider_id));
+      populateModelSelect(normalizeAuto(key.model));
+      populateEffortSelect(normalizeAuto(key.reasoning_effort));
+      els.editModal.hidden = false;
+      setTimeout(() => els.editName.focus(), 0);
+    }
+
+    function populateProviderSelect(selected) {
+      const providers = state.routing.providers || [];
+      els.editProvider.innerHTML = `<option value="AUTO">AUTO</option>${providers.map(provider => `<option value="${escapeHTML(provider.id)}">${escapeHTML(provider.name)}${provider.enabled ? "" : "（已停用）"}</option>`).join("")}`;
+      if (![...els.editProvider.options].some(option => option.value === selected) && selected !== "AUTO") els.editProvider.add(new Option(selected, selected));
+      els.editProvider.value = selected;
+    }
+
+    function modelsForProvider(providerID) {
+      if (String(providerID).toUpperCase() === "AUTO") return state.routing.models || [];
+      return (state.routing.providers || []).find(provider => provider.id === providerID)?.models || [];
+    }
+
+    function populateModelSelect(selected = "AUTO") {
+      const models = [...new Set(modelsForProvider(els.editProvider.value).map(String))].sort((a, b) => a.localeCompare(b));
+      els.editModel.innerHTML = `<option value="AUTO">AUTO</option>${models.map(model => `<option value="${escapeHTML(model)}">${escapeHTML(model)}</option>`).join("")}`;
+      if (![...els.editModel.options].some(option => option.value === selected) && selected !== "AUTO") els.editModel.add(new Option(selected, selected));
+      els.editModel.value = selected;
+    }
+
+    function populateEffortSelect(selected) {
+      const efforts = state.routing.reasoning_efforts || ["AUTO", "none", "minimal", "low", "medium", "high", "xhigh"];
+      els.editEffort.innerHTML = efforts.map(effort => `<option value="${escapeHTML(effort)}">${escapeHTML(effort)}</option>`).join("");
+      els.editEffort.value = efforts.includes(selected) ? selected : "AUTO";
+    }
+
+    async function saveEdit() {
+      const key = state.keys.find(item => item.id === state.editID);
+      if (!key) return;
+      const name = els.editName.value.trim();
+      if (!name) { setStatus("名稱不可空白。", "error"); return; }
+      const body = keyType(key) !== "chat" ? { name, provider_id: "AUTO", model: "AUTO", reasoning_effort: "AUTO" } : {
+        name,
+        provider_id: els.editProvider.value || "AUTO",
+        model: els.editModel.value || "AUTO",
+        reasoning_effort: els.editEffort.value || "AUTO"
+      };
+      showLoading("正在儲存金鑰設定...");
+      try {
+        const payload = await api(`api/api-keys/${encodeURIComponent(key.id)}`, { method: "PUT", body: JSON.stringify(body) });
+        state.keys = state.keys.map(item => item.id === key.id ? payload.key : item);
+        closeModal("edit");
+        render();
+        setStatus("金鑰設定已更新。", "success");
+      } catch (error) { setStatus(error.message, "error"); } finally { hideLoading(); }
+    }
+
+    function requestConfirm(title, message, action) {
+      els.confirmTitle.textContent = title;
+      els.confirmMessage.textContent = message;
+      state.confirmAction = action;
+      els.confirmModal.hidden = false;
+    }
+
+    async function runConfirmedAction() {
+      if (!state.confirmAction) return;
+      const action = state.confirmAction;
+      state.confirmAction = null;
+      els.confirmModal.hidden = true;
+      showLoading("正在處理...");
+      try { await action(); } catch (error) { setStatus(error.message, "error"); } finally { hideLoading(); }
+    }
+
+    function toggleKey(key) {
+      requestConfirm(key.enabled ? "停用金鑰" : "啟用金鑰", `確定要${key.enabled ? "停用" : "啟用"}「${key.name}」嗎？`, async () => {
+        const action = key.enabled ? "disable" : "enable";
+        const payload = await api(`api/api-keys/${encodeURIComponent(key.id)}/${action}`, { method: "POST" });
+        state.keys = state.keys.map(item => item.id === key.id ? payload.key : item);
+        render(); setStatus(`金鑰已${key.enabled ? "停用" : "啟用"}。`, "success");
+      });
+    }
+
+    function deleteKey(key) {
+      requestConfirm("刪除金鑰", `確定要永久刪除「${key.name}」嗎？此操作無法復原。`, async () => {
+        await api(`api/api-keys/${encodeURIComponent(key.id)}`, { method: "DELETE" });
+        state.keys = state.keys.filter(item => item.id !== key.id);
+        render(); setStatus("金鑰已刪除。", "success");
+      });
+    }
+
+    async function openStats(key) {
+      if (keyType(key) === "mcp") return;
+      state.statsID = key.id;
+      state.statsMonth = currentMonth();
+      els.statsTitle.textContent = "API Key 使用統計";
+      els.statsSubtitle.textContent = `${key.name} · 每日使用次數`;
+      els.statsModal.hidden = false;
+      await loadStats();
+    }
+
+    async function loadStats() {
+      const key = state.keys.find(item => item.id === state.statsID);
+      if (!key) return;
+      els.monthLabel.textContent = monthLabel(state.statsMonth);
+      els.statsMessage.textContent = "正在載入統計資料...";
+      try {
+        const payload = await api(`api/api-keys/${encodeURIComponent(key.id)}/usage?month=${encodeURIComponent(state.statsMonth)}`);
+        const dates = monthDates(state.statsMonth);
+        const counts = new Map((payload.days || []).map(day => [day.date, Number(day.count || 0)]));
+        await ensureChart();
+        state.chart?.destroy();
+        state.chart = new Chart(els.usageChart, {
+          type: "line",
+          data: { labels: dates.map(date => date.slice(-2)), datasets: [{ label: window.LBPI18n?.t("使用次數") || "使用次數", data: dates.map(date => counts.get(date) || 0), borderColor: "#1f2933", backgroundColor: "rgba(47,133,95,.14)", pointRadius: 3, tension: .18, fill: true }] },
+          options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { precision: 0 }, title: { display: true, text: window.LBPI18n?.t("使用次數") || "使用次數" } }, x: { title: { display: true, text: window.LBPI18n?.t("日期") || "日期" } } } }
+        });
+        els.statsMessage.textContent = `${state.statsMonth} 累計 ${formatCount(payload.total || 0)} 次。`;
+      } catch (error) { els.statsMessage.textContent = error.message; }
+    }
+
+    function ensureChart() {
+      if (window.Chart) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js";
+        script.onload = resolve; script.onerror = () => reject(new Error("圖表元件載入失敗")); document.head.appendChild(script);
+      });
+    }
+    function currentMonth() { const now = new Date(); return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`; }
+    function shiftMonth(value, offset) { const [year, month] = value.split("-").map(Number); const date = new Date(year, month - 1 + offset, 1); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`; }
+    function monthLabel(value) { const [year, month] = value.split("-"); return `${year} 年 ${month} 月`; }
+    function monthDates(value) { const [year, month] = value.split("-").map(Number); const days = new Date(year, month, 0).getDate(); return Array.from({ length: days }, (_, index) => `${year}-${String(month).padStart(2, "0")}-${String(index + 1).padStart(2, "0")}`); }
+
+    function closeModal(name) {
+      if (name === "edit") { els.editModal.hidden = true; state.editID = ""; }
+      if (name === "confirm") { els.confirmModal.hidden = true; state.confirmAction = null; }
+      if (name === "stats") { els.statsModal.hidden = true; state.statsID = ""; state.chart?.destroy(); state.chart = null; }
+    }
+
+    document.querySelectorAll("[data-tab]").forEach(button => button.addEventListener("click", () => {
+      state.tab = button.dataset.tab; state.page = 1; state.filter = "all"; els.generatedBox.classList.remove("active"); localStorage.setItem("lbp.keys.tab", state.tab); populateNameFilter(); render();
+    }));
+    document.querySelectorAll("[data-sort]").forEach(button => button.addEventListener("click", () => {
+      const field = button.dataset.sort; state.sortDirection = state.sortField === field && state.sortDirection === "asc" ? "desc" : "asc"; state.sortField = field;
+      localStorage.setItem("lbp.keys.sortField", state.sortField); localStorage.setItem("lbp.keys.sortDirection", state.sortDirection); render();
+    }));
+    document.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", () => closeModal(button.dataset.close)));
+    els.reloadButton.addEventListener("click", loadAll);
+    els.createButton.addEventListener("click", createKey);
+    els.copyGeneratedButton.addEventListener("click", async () => { await navigator.clipboard.writeText(els.generatedValue.textContent || ""); setStatus("API Key 已複製。", "success"); });
+    els.nameFilter.addEventListener("change", () => { state.filter = els.nameFilter.value; state.page = 1; localStorage.setItem("lbp.keys.filter", state.filter); render(); });
+    els.prevPage.addEventListener("click", () => { state.page--; render(); });
+    els.nextPage.addEventListener("click", () => { state.page++; render(); });
+    els.editProvider.addEventListener("change", () => populateModelSelect("AUTO"));
+    els.saveEditButton.addEventListener("click", saveEdit);
+    els.confirmButton.addEventListener("click", runConfirmedAction);
+    els.prevMonth.addEventListener("click", () => { state.statsMonth = shiftMonth(state.statsMonth, -1); loadStats(); });
+    els.nextMonth.addEventListener("click", () => { state.statsMonth = shiftMonth(state.statsMonth, 1); loadStats(); });
+    els.keyRows.addEventListener("click", event => {
+      const button = event.target.closest("[data-action]"); if (!button) return;
+      const key = state.keys.find(item => item.id === button.dataset.id); if (!key) return;
+      if (button.dataset.action === "edit") openEdit(key.id);
+      if (button.dataset.action === "stats") openStats(key);
+      if (button.dataset.action === "toggle") toggleKey(key);
+      if (button.dataset.action === "delete") deleteKey(key);
+    });
+    [els.editModal, els.confirmModal, els.statsModal].forEach(modal => modal.addEventListener("click", event => { if (event.target === modal) closeModal(modal === els.editModal ? "edit" : modal === els.confirmModal ? "confirm" : "stats"); }));
+    document.addEventListener("keydown", event => {
+      if (event.key === "Enter" && event.target.matches("input, select")) event.preventDefault();
+      if (event.key !== "Escape") return;
+      if (!els.editModal.hidden) closeModal("edit"); else if (!els.confirmModal.hidden) closeModal("confirm"); else if (!els.statsModal.hidden) closeModal("stats");
+    });
+    window.addEventListener("lbp-language-changed", () => {
+      render();
+      if (state.statsID) void loadStats();
+    });
+
+    refreshIcons();
+    loadAll();
+  </script>
+</body>
+</html>

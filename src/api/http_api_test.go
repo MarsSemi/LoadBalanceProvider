@@ -1,0 +1,1062 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"LoadBalanceProvider/src/auth"
+	"LoadBalanceProvider/src/balancer"
+	"LoadBalanceProvider/src/domain"
+	"LoadBalanceProvider/src/providerusage"
+	"LoadBalanceProvider/src/proxy"
+)
+
+// -------------------------------------------------------------------------------------
+func TestAPIKeyRoutingPolicyOverridesChatRequest(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ProviderID:      "provider-2",
+		Model:           "model-2",
+		ReasoningEffort: "medium",
+	}))
+	_body, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, []byte(`{"model":"caller-model","provider_id":"caller-provider","reasoning_effort":"low","messages":[]}`), false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	var _payload map[string]interface{}
+	if _err := json.Unmarshal(_body, &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload["provider_id"] != "provider-2" || _payload["model"] != "model-2" || _payload["reasoning_effort"] != "medium" {
+		t.Fatalf("rewritten payload = %#v", _payload)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// AUTO 代表「不強制」：呼叫端自己送來的 provider / model / reasoning 必須原封不動保留。
+func TestAPIKeyAutoRoutingPolicyPreservesCallerOverrides(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ProviderID:      "AUTO",
+		Model:           "AUTO",
+		ReasoningEffort: "AUTO",
+	}))
+	_body, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, []byte(`{"model":"caller-model","provider_id":"caller-provider","reasoning":{"effort":"xhigh","summary":"auto"},"input":"hi"}`), true)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	var _payload map[string]interface{}
+	if _err := json.Unmarshal(_body, &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload["provider_id"] != "caller-provider" {
+		t.Fatalf("provider_id = %#v, want caller-provider preserved", _payload["provider_id"])
+	}
+	if _payload["model"] != "caller-model" {
+		t.Fatalf("model = %#v, want caller-model preserved", _payload["model"])
+	}
+	_reasoning, _ok := _payload["reasoning"].(map[string]interface{})
+	if !_ok || _reasoning["summary"] != "auto" {
+		t.Fatalf("reasoning summary was not preserved: %#v", _payload["reasoning"])
+	}
+	if _reasoning["effort"] != "xhigh" {
+		t.Fatalf("reasoning effort = %#v, want xhigh preserved", _reasoning["effort"])
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 只綁 provider、模型維持 AUTO：provider 被強制，模型仍由呼叫端決定。
+func TestAPIKeyRoutingPolicyPinsProviderButKeepsCallerModel(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ProviderID:      "provider-2",
+		Model:           "AUTO",
+		ReasoningEffort: "AUTO",
+	}))
+	_body, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, []byte(`{"model":"caller-model","reasoning_effort":"low","messages":[]}`), false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	var _payload map[string]interface{}
+	if _err := json.Unmarshal(_body, &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload["provider_id"] != "provider-2" {
+		t.Fatalf("provider_id = %#v, want provider-2", _payload["provider_id"])
+	}
+	if _payload["model"] != "caller-model" {
+		t.Fatalf("model = %#v, want caller-model preserved", _payload["model"])
+	}
+	if _payload["reasoning_effort"] != "low" {
+		t.Fatalf("reasoning_effort = %#v, want low preserved", _payload["reasoning_effort"])
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestAPIKeyModelExistsValidatesAgainstPinnedProvider(t *testing.T) {
+	_handler := &HTTPAPI{Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-1", Enabled: true, Models: []domain.LLMModelConfig{{Name: "model-a", Aliases: []string{"alias-a"}}}},
+		{ID: "provider-2", Enabled: true, Models: []domain.LLMModelConfig{{Name: "model-b"}}},
+	}})}
+
+	if !_handler.apiKeyModelExists("provider-1", "model-a") {
+		t.Fatal("model-a should exist on provider-1")
+	}
+	if !_handler.apiKeyModelExists("provider-1", "alias-a") {
+		t.Fatal("alias-a should match model-a on provider-1")
+	}
+	if _handler.apiKeyModelExists("provider-1", "model-b") {
+		t.Fatal("model-b belongs to provider-2 and must not validate against provider-1")
+	}
+	if !_handler.apiKeyModelExists("AUTO", "model-b") {
+		t.Fatal("model-b should validate when the provider is AUTO")
+	}
+	if _handler.apiKeyModelExists("AUTO", "does-not-exist") {
+		t.Fatal("unknown model must not validate")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestPinnedRoutingUnavailableReasonExplainsDisabledProvider(t *testing.T) {
+	_handler := &HTTPAPI{Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-1", Name: "Pinned One", Enabled: false, Models: []domain.LLMModelConfig{{Name: "model-a"}}},
+	}})}
+
+	_pinned := func(_providerID string, _model string) *http.Request {
+		_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+		return _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+			ProviderID: _providerID, Model: _model, ReasoningEffort: "AUTO",
+		}))
+	}
+
+	if _reason := _handler.pinnedRoutingUnavailableReason(_pinned("provider-1", "AUTO")); !strings.Contains(_reason, "disabled") {
+		t.Fatalf("disabled provider reason = %q", _reason)
+	}
+	if _reason := _handler.pinnedRoutingUnavailableReason(_pinned("ghost-provider", "AUTO")); !strings.Contains(_reason, "no longer exists") {
+		t.Fatalf("missing provider reason = %q", _reason)
+	}
+	if _reason := _handler.pinnedRoutingUnavailableReason(_pinned("AUTO", "AUTO")); _reason != "" {
+		t.Fatalf("AUTO policy should not produce a pinned reason, got %q", _reason)
+	}
+}
+
+// 全 AUTO 的政策不得改寫 body：既省下重新序列化，也避免數值精度／空 body 被破壞。
+func TestAutoRoutingPolicyLeavesBodyByteIdentical(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ProviderID: "AUTO", Model: "AUTO", ReasoningEffort: "AUTO",
+	}))
+
+	_original := []byte(`{"model":"m","seed":9007199254740993,"temperature":1.0,"messages":[]}`)
+	_rewritten, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, _original, false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if string(_rewritten) != string(_original) {
+		t.Fatalf("AUTO policy must not touch the body:\n got %s\nwant %s", _rewritten, _original)
+	}
+
+	_empty, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, []byte(``), false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if string(_empty) != "" {
+		t.Fatalf("empty body must stay empty, got %q", _empty)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 需要改寫時，未涉及的大整數欄位仍須保持原值（UseNumber）。
+func TestRoutingPolicyRewritePreservesLargeIntegers(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ProviderID: "provider-2", Model: "AUTO", ReasoningEffort: "AUTO",
+	}))
+
+	_rewritten, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, []byte(`{"model":"m","seed":9007199254740993,"messages":[]}`), false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if !strings.Contains(string(_rewritten), `"seed":9007199254740993`) {
+		t.Fatalf("large integer lost precision: %s", _rewritten)
+	}
+	if !strings.Contains(string(_rewritten), `"provider_id":"provider-2"`) {
+		t.Fatalf("provider was not pinned: %s", _rewritten)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestTemporaryAPIKeyDoesNotOverrideRequest(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		Temporary:       true,
+		ProviderID:      "provider-2",
+		Model:           "model-2",
+		ReasoningEffort: "high",
+	}))
+	_original := []byte(`{"model":"caller-model","messages":[]}`)
+	_rewritten, _err := applyAPIKeyRoutingPolicyToJSONRequest(_request, _original, false)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if string(_rewritten) != string(_original) {
+		t.Fatalf("temporary key rewrote request: %s", _rewritten)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 帶了明確憑證就完全不讀 Session Cookie，否則失效的 Chat Key 會被登入 session 掩蓋。
+func TestRequestAPIKeysIgnoreSessionCookieWhenExplicitCredentialPresent(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request.Header.Set("Authorization", "Bearer lbp_chat")
+	_request.Header.Set("X-API-Key", "lbp_alternate")
+	_request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "lbp_session"})
+
+	_keys := requestAPIKeys(_request)
+	if len(_keys) != 2 {
+		t.Fatalf("keys = %#v, want only the explicit credentials", _keys)
+	}
+	if _keys[0].Key != "lbp_chat" || _keys[0].FromCookie {
+		t.Fatalf("first key = %#v, want explicit bearer", _keys[0])
+	}
+	for _, _candidate := range _keys {
+		if _candidate.FromCookie {
+			t.Fatalf("session cookie must not be considered: %#v", _keys)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestRequestAPIKeysFallsBackToSessionCookieWithoutExplicitCredential(t *testing.T) {
+	_request := httptest.NewRequest(http.MethodGet, "/api/api-keys", nil)
+	_request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "lbp_session"})
+
+	_keys := requestAPIKeys(_request)
+	if len(_keys) != 1 || _keys[0].Key != "lbp_session" || !_keys[0].FromCookie {
+		t.Fatalf("keys = %#v, want the session cookie", _keys)
+	}
+}
+
+// Response 擁有者必須來自「已驗證」的金鑰身分，不得由未驗證的 Header/Cookie 推導。
+func TestResponseRouteOwnerComesFromVerifiedKeyOnly(t *testing.T) {
+	_spoofed := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_spoofed.Header.Set("X-API-Key", "someone-elses-key")
+	_spoofed.AddCookie(&http.Cookie{Name: "unrelated_cookie", Value: "not-a-credential"})
+	if _owner := proxy.ResponseRouteOwner(_spoofed); _owner != "anonymous" {
+		t.Fatalf("unverified headers must not establish ownership, got %q", _owner)
+	}
+
+	_verified := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_verified.Header.Set("X-API-Key", "someone-elses-key")
+	_verified = _verified.WithContext(proxy.WithResponseRouteOwner(_verified.Context(), "key:real-id"))
+	if _owner := proxy.ResponseRouteOwner(_verified); _owner != "key:real-id" {
+		t.Fatalf("owner = %q, want the verified key identity", _owner)
+	}
+}
+
+// 沒有 previous_response_id 時完全不介入，維持原本的負載平衡。
+func TestConversationAffinitySkippedWithoutPreviousResponse(t *testing.T) {
+	_handler := &HTTPAPI{Client: proxy.NewClient(), Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, []byte(`{"model":"AUTO","input":"hi"}`), _request)
+	if _pinned || _dropped {
+		t.Fatalf("pinned=%v dropped=%v, want both false", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "" {
+		t.Fatalf("provider must stay unpinned, got %q", _selection.ProviderID)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 帶 previous_response_id 時，必須回到當初服務該回應的 provider 與模型。
+func TestConversationAffinityPinsPreviousProvider(t *testing.T) {
+	_client := proxy.NewClient()
+	_handler := &HTTPAPI{Client: _client, Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-a", Enabled: true, BaseURL: "http://a"},
+		{ID: "provider-b", Enabled: true, BaseURL: "http://b"},
+	}})}
+
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_request = _request.WithContext(proxy.WithResponseRouteOwner(_request.Context(), "key:owner-1"))
+	_client.RecordResponseSnapshotForOwner("resp_prev", "provider-a", "gpt-5.6-luna", proxy.ResponseRouteOwner(_request), nil, nil)
+
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, []byte(`{"model":"AUTO","previous_response_id":"resp_prev"}`), _request)
+	if !_pinned || _dropped {
+		t.Fatalf("pinned=%v dropped=%v, want pinned", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "provider-a" {
+		t.Fatalf("provider = %q, want provider-a", _selection.ProviderID)
+	}
+	if _selection.Model != "gpt-5.6-luna" {
+		t.Fatalf("model = %q, want the model that served the previous response", _selection.Model)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// Codex 多輪工具呼叫常常不送 previous_response_id，只帶 prompt_cache_key，
+// 這種請求同樣必須黏回原 provider。
+func TestConversationAffinityPinsByPromptCacheKey(t *testing.T) {
+	_client := proxy.NewClient()
+	_handler := &HTTPAPI{Client: _client, Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-a", Enabled: true, BaseURL: "http://a"},
+		{ID: "provider-b", Enabled: true, BaseURL: "http://b"},
+	}})}
+
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_request = _request.WithContext(proxy.WithResponseRouteOwner(_request.Context(), "key:owner-1"))
+	_client.RecordPromptCacheRoute(proxy.PromptCacheRouteID("conv-uuid"), "provider-a", "gpt-5.6-luna", proxy.ResponseRouteOwner(_request))
+
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+	_body := []byte(`{"model":"AUTO","prompt_cache_key":"conv-uuid","input":[{"type":"reasoning","encrypted_content":"x"}]}`)
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, _body, _request)
+	if !_pinned || _dropped {
+		t.Fatalf("pinned=%v dropped=%v, want pinned via prompt_cache_key", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "provider-a" {
+		t.Fatalf("provider = %q, want provider-a", _selection.ProviderID)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 全新對話（沒有任何延續性內容）不該被判定為需要重設，避免無謂的 strip 與日誌噪音。
+func TestConversationAffinityIgnoresBrandNewConversation(t *testing.T) {
+	_handler := &HTTPAPI{Client: proxy.NewClient(), Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+	_body := []byte(`{"model":"AUTO","prompt_cache_key":"brand-new","input":[{"type":"message","role":"user","content":"hi"}]}`)
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, _body, _request)
+	if _pinned || _dropped {
+		t.Fatalf("pinned=%v dropped=%v, want both false for a brand new conversation", _pinned, _dropped)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 未知的 cache key 但帶著加密推理內容 → 必須重設延續性，不能原樣送給隨機 provider。
+func TestConversationAffinityResetsUnknownCacheKeyWithEncryptedReasoning(t *testing.T) {
+	_handler := &HTTPAPI{Client: proxy.NewClient(), Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+	_body := []byte(`{"model":"AUTO","prompt_cache_key":"unknown","input":[{"type":"reasoning","encrypted_content":"x"}]}`)
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, _body, _request)
+	if _pinned || !_dropped {
+		t.Fatalf("pinned=%v dropped=%v, want continuity reset", _pinned, _dropped)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 明確模型是呼叫端參數，黏著只固定原 provider，不得拿舊模型覆寫。
+func TestConversationAffinityPreservesExplicitModel(t *testing.T) {
+	_client := proxy.NewClient()
+	_handler := &HTTPAPI{Client: _client, Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-a", Name: "Provider A", Kind: "openai-codex", Enabled: true},
+	}})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_client.RecordResponseSnapshotForOwner("resp_explicit", "provider-a", "old-model", proxy.ResponseRouteOwner(_request), nil, nil)
+
+	_selection := domain.ChatCompletionRequest{Model: "caller-model"}
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, []byte(`{"model":"caller-model","previous_response_id":"resp_explicit"}`), _request)
+	if !_pinned || _dropped {
+		t.Fatalf("pinned=%v dropped=%v, want pinned", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "provider-a" || _selection.Model != "caller-model" {
+		t.Fatalf("selection = provider %q model %q", _selection.ProviderID, _selection.Model)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// route 過期、淘汰或重啟遺失時仍可重平衡，但必須要求移除舊 continuity。
+func TestConversationAffinityRouteMissResetsContinuity(t *testing.T) {
+	_handler := &HTTPAPI{Client: proxy.NewClient(), Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, []byte(`{"model":"AUTO","previous_response_id":"missing"}`), _request)
+	if _pinned || !_dropped {
+		t.Fatalf("pinned=%v dropped=%v, want continuity reset", _pinned, _dropped)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 強制 provider 與 response route 不同時，不可把原帳號的 ID 轉送給新帳號。
+func TestConversationAffinityForcedProviderConflictResetsContinuity(t *testing.T) {
+	_client := proxy.NewClient()
+	_handler := &HTTPAPI{Client: _client, Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-a", Name: "Provider A", Kind: "openai-codex", Enabled: true},
+		{ID: "provider-b", Name: "Provider B", Kind: "openai-codex", Enabled: true},
+	}})}
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_client.RecordResponseSnapshotForOwner("resp_conflict", "provider-a", "model-a", proxy.ResponseRouteOwner(_request), nil, nil)
+	_selection := domain.ChatCompletionRequest{Model: "AUTO", ProviderID: "provider-b"}
+
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, []byte(`{"model":"AUTO","previous_response_id":"resp_conflict"}`), _request)
+	if _pinned || !_dropped {
+		t.Fatalf("pinned=%v dropped=%v, want continuity reset", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "provider-b" {
+		t.Fatalf("forced provider changed to %q", _selection.ProviderID)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestAdvancedSettingsHandlersPersistValues(t *testing.T) {
+	_path := filepath.Join(t.TempDir(), "advanced_settings.json")
+	_handler := &HTTPAPI{Client: proxy.NewClient(), AdvancedSettingsConfigPath: _path}
+	_recorder := httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{
+		"conversationAffinityTTLMinutes":45,
+		"conversationAffinityQuotaTolerancePoints":12.5,
+		"responseRouteMaxEntries":3500,
+		"providerCapacityCooldownSeconds":25
+	}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("save status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+
+	_recorder = httptest.NewRecorder()
+	_handler.handleGetAdvancedSettings(_recorder)
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("get status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+	var _payload struct {
+		Advanced AdvancedSettingsForm `json:"advanced"`
+	}
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.Advanced.ConversationAffinityTTLMinutes != 45 ||
+		_payload.Advanced.ConversationAffinityQuotaTolerancePoints != 12.5 ||
+		_payload.Advanced.ResponseRouteMaxEntries != 3500 ||
+		_payload.Advanced.ProviderCapacityCooldownSeconds != 25 {
+		t.Fatalf("advanced settings = %#v", _payload.Advanced)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 部分更新不得把未提供的欄位重設為零值。tolerance 的 0 是合法值，
+// 一旦被靜默寫入就會無聲關閉對話黏著。
+func TestAdvancedSettingsPartialUpdateKeepsOtherValues(t *testing.T) {
+	_path := filepath.Join(t.TempDir(), "advanced_settings.json")
+	_handler := &HTTPAPI{Client: proxy.NewClient(), AdvancedSettingsConfigPath: _path}
+
+	_recorder := httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{
+		"conversationAffinityTTLMinutes":45,
+		"conversationAffinityQuotaTolerancePoints":12.5,
+		"responseRouteMaxEntries":3500
+	}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("initial save status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+
+	// 只更新 TTL，其餘欄位必須保持不變。
+	_recorder = httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"conversationAffinityTTLMinutes":90}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("partial save status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+
+	var _payload struct {
+		Advanced AdvancedSettingsForm `json:"advanced"`
+	}
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.Advanced.ConversationAffinityTTLMinutes != 90 {
+		t.Fatalf("ttl = %d, want 90", _payload.Advanced.ConversationAffinityTTLMinutes)
+	}
+	if _payload.Advanced.ConversationAffinityQuotaTolerancePoints != 12.5 {
+		t.Fatalf("tolerance = %v, want 12.5 preserved", _payload.Advanced.ConversationAffinityQuotaTolerancePoints)
+	}
+	if _payload.Advanced.ResponseRouteMaxEntries != 3500 {
+		t.Fatalf("max entries = %d, want 3500 preserved", _payload.Advanced.ResponseRouteMaxEntries)
+	}
+
+	// 明確送 0 仍要生效（0 是合法的「完全不容忍」設定）。
+	_recorder = httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"conversationAffinityQuotaTolerancePoints":0}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("explicit zero status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.Advanced.ConversationAffinityQuotaTolerancePoints != 0 {
+		t.Fatalf("explicit zero tolerance was not applied: %#v", _payload.Advanced)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 放棄黏著時，只有原帳號能解讀的延續性內容必須一併移除，否則新 provider 必定失敗。
+func TestStripConversationContinuityRemovesEncryptedReasoning(t *testing.T) {
+	_body := []byte(`{"model":"m","previous_response_id":"resp_prev","input":[` +
+		`{"type":"message","role":"user","content":"hi"},` +
+		`{"type":"reasoning","encrypted_content":"secret"},` +
+		`{"type":"function_call_output","output":"done"}]}`)
+
+	_stripped, _err := stripConversationContinuity(_body)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	_text := string(_stripped)
+	if strings.Contains(_text, "previous_response_id") {
+		t.Fatalf("previous_response_id must be removed: %s", _text)
+	}
+	if strings.Contains(_text, "encrypted_content") || strings.Contains(_text, "secret") {
+		t.Fatalf("encrypted reasoning must be removed: %s", _text)
+	}
+	if !strings.Contains(_text, "function_call_output") || !strings.Contains(_text, `"hi"`) {
+		t.Fatalf("ordinary conversation items must be kept: %s", _text)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestWriteSelectionUnavailableSetsRetryAfterOnlyForTemporaryOverload(t *testing.T) {
+	_handler := &HTTPAPI{}
+	_temporary := httptest.NewRecorder()
+	_handler.writeSelectionUnavailable(_temporary, nil, &balancer.NoAvailableProviderError{
+		TemporaryOverload: true,
+		RetryAfter:        15 * time.Second,
+	})
+	if _temporary.Code != http.StatusServiceUnavailable || _temporary.Header().Get("Retry-After") != "15" {
+		t.Fatalf("temporary response = status %d Retry-After %q", _temporary.Code, _temporary.Header().Get("Retry-After"))
+	}
+
+	_generic := httptest.NewRecorder()
+	_handler.writeSelectionUnavailable(_generic, nil, &balancer.NoAvailableProviderError{})
+	if _generic.Header().Get("Retry-After") != "" {
+		t.Fatalf("generic Retry-After = %q, want empty", _generic.Header().Get("Retry-After"))
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestProviderUsageHistoryIncludesOnlyEnabledProviders(t *testing.T) {
+	_recorder := providerusage.NewRecorder(filepath.Join(t.TempDir(), "provider_usage"))
+	_start := time.Date(2026, time.August, 10, 0, 0, 0, 0, time.Local)
+	_end := time.Date(2026, time.August, 10, 23, 59, 0, 0, time.Local)
+	if _err := _recorder.RecordDayStart("enabled-provider", 100, _start); _err != nil {
+		t.Fatalf("record start: %v", _err)
+	}
+	if _err := _recorder.RecordDayEnd("enabled-provider", 65, _end); _err != nil {
+		t.Fatalf("record end: %v", _err)
+	}
+
+	_balancer := balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "enabled-provider", Enabled: true},
+		{ID: "disabled-provider", Enabled: false},
+	}})
+	_handler := &HTTPAPI{Balancer: _balancer, ProviderUsageRecorder: _recorder}
+	_response := httptest.NewRecorder()
+
+	_handler.handleGetProviderUsageHistory(_response, "2026-08")
+	if _response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", _response.Code, _response.Body.String())
+	}
+
+	var _payload providerusage.MonthStats
+	if _err := json.Unmarshal(_response.Body.Bytes(), &_payload); _err != nil {
+		t.Fatalf("decode response: %v", _err)
+	}
+	if _payload.ProviderCount != 1 || _payload.ObservedDays != 1 || len(_payload.Days) != 1 {
+		t.Fatalf("payload = %#v", _payload)
+	}
+	if _payload.Days[0].Date != "2026-08-10" || _payload.Days[0].UsagePercent != 35 || _payload.Days[0].RemainingPercent != 65 {
+		t.Fatalf("day = %#v", _payload.Days[0])
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestUpstreamContentRejectionDoesNotPenalizeProviderHealth(t *testing.T) {
+	_provider := &balancer.ProviderRuntime{Config: &domain.LLMProviderConfig{ID: "provider-1", Enabled: true}}
+	_err := &proxy.ProviderStreamError{
+		Message:           "Request blocked by content policy",
+		ResponseForwarded: true,
+		UpstreamRejected:  true,
+	}
+
+	recordProviderForwardFailure(_provider, _err, nil, time.Second, defaultProviderCapacityCooldown)
+
+	if _provider.Failures != 0 || _provider.ConsecutiveFailures != 0 {
+		t.Fatalf("content rejection changed provider health: failures=%d consecutive=%d", _provider.Failures, _provider.ConsecutiveFailures)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSetCORSHeadersAllowsPreflightWithExplicitTokenHeader(t *testing.T) {
+	_req := httptest.NewRequest(http.MethodOptions, "/v1/chat/completions", nil)
+	_req.Header.Set("Origin", "https://client.example")
+	_req.Header.Set("Access-Control-Request-Headers", "content-type, authorization")
+	_rec := httptest.NewRecorder()
+
+	setCORSHeaders(_rec, _req)
+
+	if _got := _rec.Header().Get("Access-Control-Allow-Origin"); _got != "https://client.example" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want origin", _got)
+	}
+	if _got := _rec.Header().Get("Access-Control-Allow-Credentials"); _got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSetCORSHeadersRejectsPreflightWithoutExplicitTokenHeader(t *testing.T) {
+	_req := httptest.NewRequest(http.MethodOptions, "/api/session", nil)
+	_req.Header.Set("Origin", "https://client.example")
+	_req.Header.Set("Access-Control-Request-Headers", "content-type")
+	_rec := httptest.NewRecorder()
+
+	setCORSHeaders(_rec, _req)
+
+	if _got := _rec.Header().Get("Access-Control-Allow-Origin"); _got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want empty", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSetCORSHeadersAllowsActualRequestWithExplicitAPIKey(t *testing.T) {
+	_req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_req.Header.Set("Origin", "https://client.example")
+	_req.Header.Set("X-API-Key", "lbp_test")
+	_rec := httptest.NewRecorder()
+
+	setCORSHeaders(_rec, _req)
+
+	if _got := _rec.Header().Get("Access-Control-Allow-Origin"); _got != "https://client.example" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want origin", _got)
+	}
+	if _got := _rec.Header().Get("Access-Control-Allow-Credentials"); _got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSetCORSHeadersRejectsCookieOnlyCrossOriginRequest(t *testing.T) {
+	_req := httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	_req.Header.Set("Origin", "https://client.example")
+	_req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "lbp_session"})
+	_rec := httptest.NewRecorder()
+
+	setCORSHeaders(_rec, _req)
+
+	if _got := _rec.Header().Get("Access-Control-Allow-Origin"); _got != "" {
+		t.Fatalf("Access-Control-Allow-Origin = %q, want empty", _got)
+	}
+	if _got := _rec.Header().Get("Access-Control-Allow-Credentials"); _got != "" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q, want empty", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestNormalizedAPIRouteStripsPathProxyPrefix(t *testing.T) {
+	_cases := map[string]string{
+		"/api/session":                             "/api/session",
+		"/v1/chat/completions":                     "/v1/chat/completions",
+		"/netpass/lbp/api/session":                 "/api/session",
+		"/netpass/lbp/v1/chat/completions":         "/v1/chat/completions",
+		"/netpass/lbp/api/provider-configs/":       "/api/provider-configs",
+		"/netpass/lbp/api/v1/chat/completions":     "/v1/chat/completions",
+		"/api/v1/api/settings/general":             "/api/settings/general",
+		"/netpass/lbp/api/v1/api/settings/general": "/api/settings/general",
+	}
+
+	for _path, _want := range _cases {
+		if _got := normalizedAPIRoute(_path); _got != _want {
+			t.Fatalf("normalizedAPIRoute(%q) = %q, want %q", _path, _got, _want)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestModelsRouteAcceptsRootModelsPath(t *testing.T) {
+	for _, _route := range []string{"/models", "/v1/models", "/api/v1/models"} {
+		_normalized := normalizedAPIRoute(_route)
+		if !isModelsRoute(_normalized) {
+			t.Fatalf("isModelsRoute(%q) = false, want true", _route)
+		}
+		if !isChatCompatibleRoute(http.MethodGet, _normalized) {
+			t.Fatalf("isChatCompatibleRoute(GET, %q) = false, want true", _route)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestModelRetrieveRouteAcceptsOpenAICompatiblePaths(t *testing.T) {
+	_cases := map[string]string{
+		"/models/AUTO":           "AUTO",
+		"/v1/models/gpt-5.5":     "gpt-5.5",
+		"/api/v1/models/gpt%205": "gpt 5",
+	}
+	for _route, _want := range _cases {
+		_normalized := normalizedAPIRoute(_route)
+		if !isModelRetrieveRoute(_normalized) {
+			t.Fatalf("isModelRetrieveRoute(%q) = false, want true", _route)
+		}
+		if !isChatCompatibleRoute(http.MethodGet, _normalized) {
+			t.Fatalf("isChatCompatibleRoute(GET, %q) = false, want true", _route)
+		}
+		if _got := modelIDFromRetrieveRoute(_normalized); _got != _want {
+			t.Fatalf("modelIDFromRetrieveRoute(%q) = %q, want %q", _route, _got, _want)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestResponsesProxySubrouteAcceptsDeleteAndCompact(t *testing.T) {
+	_cases := []struct {
+		Method string
+		Route  string
+	}{
+		{http.MethodDelete, "/v1/responses/resp_123"},
+		{http.MethodPost, "/v1/responses/resp_123/compact"},
+		{http.MethodDelete, "/api/v1/responses/resp_123"},
+		{http.MethodPost, "/api/v1/responses/resp_123/compact"},
+		{http.MethodPost, "/v1/responses/compact"},
+		{http.MethodPost, "/api/v1/responses/compact"},
+	}
+	for _, _case := range _cases {
+		_normalized := normalizedAPIRoute(_case.Route)
+		if !isResponsesProxySubroute(_case.Method, _normalized) {
+			t.Fatalf("isResponsesProxySubroute(%s, %q) = false, want true", _case.Method, _case.Route)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestNormalizedAPIRouteMapsCodexBackendPaths(t *testing.T) {
+	_cases := map[string]string{
+		"/backend-api/codex/models":            "/v1/models",
+		"/backend-api/codex/responses":         "/v1/responses",
+		"/backend-api/codex/responses/compact": "/v1/responses/compact",
+	}
+	for _path, _want := range _cases {
+		if _got := normalizedAPIRoute(_path); _got != _want {
+			t.Fatalf("normalizedAPIRoute(%q) = %q, want %q", _path, _got, _want)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestCodexModelsManifestRequestDetection(t *testing.T) {
+	_withVersion := httptest.NewRequest(http.MethodGet, "/v1/models?client_version=0.129.0", nil)
+	if !isCodexModelsManifestRequest(_withVersion) {
+		t.Fatal("client_version request should use Codex manifest")
+	}
+	_direct := httptest.NewRequest(http.MethodGet, "/backend-api/codex/models", nil)
+	if !isCodexModelsManifestRequest(_direct) {
+		t.Fatal("direct Codex models request should use Codex manifest")
+	}
+	_openAI := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	if isCodexModelsManifestRequest(_openAI) {
+		t.Fatal("plain OpenAI models request should keep list format")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestRequestETagMatchesCodexManifestETag(t *testing.T) {
+	_etag := codexModelsManifestETag([]byte(`{"models":[]}`))
+	if !requestETagMatches(_etag, _etag) {
+		t.Fatal("exact ETag should match")
+	}
+	if !requestETagMatches(`W/`+_etag, _etag) {
+		t.Fatal("weak ETag should match")
+	}
+	if requestETagMatches(`"different"`, _etag) {
+		t.Fatal("different ETag must not match")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestLocalTokenCountRoutesAreChatCompatible(t *testing.T) {
+	_route := "/v1/responses/input_tokens"
+	if !isLocalTokenCountRoute(_route) {
+		t.Fatalf("isLocalTokenCountRoute(%q) = false", _route)
+	}
+	if !isChatCompatibleRoute(http.MethodPost, _route) {
+		t.Fatalf("isChatCompatibleRoute(POST, %q) = false", _route)
+	}
+	if _tokens := estimateLocalInputTokens("中文測試 hello"); _tokens <= 0 {
+		t.Fatalf("estimated input tokens = %d, want positive", _tokens)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestAPIKeyUsageRouteMatchesStatsEndpoint(t *testing.T) {
+	_cases := map[string]string{
+		"/api/api-keys/key-1234567890abcdef/usage":           "/api/api-keys/key-1234567890abcdef/usage",
+		"/v1/api-keys/key-1234567890abcdef/usage":            "/v1/api-keys/key-1234567890abcdef/usage",
+		"/netpass/lbp/api/api-keys/key-abc/usage":            "/api/api-keys/key-abc/usage",
+		"/netpass/lbp/api/v1/api/api-keys/key-abc/usage":     "/api/api-keys/key-abc/usage",
+		"/proxy/a/b/api/v1/api/api-keys/key.with-dash/usage": "/api/api-keys/key.with-dash/usage",
+	}
+
+	for _path, _normalized := range _cases {
+		_route := normalizedAPIRoute(_path)
+		if _route != _normalized {
+			t.Fatalf("normalizedAPIRoute(%q) = %q, want %q", _path, _route, _normalized)
+		}
+		if !isAPIKeyUsageRoute(_route) {
+			t.Fatalf("isAPIKeyUsageRoute(%q) = false, want true", _route)
+		}
+		if _id := apiKeyIDFromUsageRoute(_route); _id == "" {
+			t.Fatalf("apiKeyIDFromUsageRoute(%q) returned empty id", _route)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestAPIKeyUsageQueryRouteMatchesStatsEndpoint(t *testing.T) {
+	_cases := map[string]string{
+		"/api/api-keys/usage":                     "/api/api-keys/usage",
+		"/v1/api-keys/usage":                      "/v1/api-keys/usage",
+		"/netpass/lbp/api/api-keys/usage":         "/api/api-keys/usage",
+		"/proxy/a/b/api/v1/api/api-keys/usage":    "/api/api-keys/usage",
+		"/proxy/a/b/api/v1/api/v1/api-keys/usage": "/v1/api-keys/usage",
+	}
+
+	for _path, _normalized := range _cases {
+		_route := normalizedAPIRoute(_path)
+		if _route != _normalized {
+			t.Fatalf("normalizedAPIRoute(%q) = %q, want %q", _path, _route, _normalized)
+		}
+		if !isAPIKeyUsageQueryRoute(_route) {
+			t.Fatalf("isAPIKeyUsageQueryRoute(%q) = false, want true", _route)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSettingsRouteMatchesPrefixedRoutes(t *testing.T) {
+	_generalRoutes := []string{
+		"/api/settings/general",
+		"/v1/settings/general",
+		"/api/v1/settings/general",
+		"/v1/api/settings/general",
+		"/netpass/lbp/api/v1/settings/general",
+		"/netpass/lbp/api/v1/api/settings/general",
+	}
+	for _, _path := range _generalRoutes {
+		_route := normalizedAPIRoute(_path)
+		if !isSettingsRoute(_route, "general") {
+			t.Fatalf("isSettingsRoute(%q => %q, general) = false, want true", _path, _route)
+		}
+	}
+
+	_notificationTestRoutes := []string{
+		"/api/settings/notification/test",
+		"/v1/settings/notification/test",
+		"/api/v1/settings/notification/test",
+		"/netpass/lbp/api/v1/settings/notification/test",
+	}
+	for _, _path := range _notificationTestRoutes {
+		_route := normalizedAPIRoute(_path)
+		if !isSettingsRoute(_route, "notification", "test") {
+			t.Fatalf("isSettingsRoute(%q => %q, notification/test) = false, want true", _path, _route)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestAPIKeyRouteIDParsingSupportsPrefixedRoutes(t *testing.T) {
+	_cases := map[string]string{
+		"/api/api-keys/key-123":                        "key-123",
+		"/v1/api-keys/key-123":                         "key-123",
+		"/api/v1/api/api-keys/key-123":                 "key-123",
+		"/netpass/lbp/api/api-keys/key-123/disable":    "key-123",
+		"/netpass/lbp/api/api-keys/key-123/usage":      "key-123",
+		"/proxy/a/b/api/v1/api/api-keys/key-123/usage": "key-123",
+	}
+
+	for _route, _want := range _cases {
+		_normalized := normalizedAPIRoute(_route)
+		if _got := apiKeyIDFromRoute(_normalized); _got != _want {
+			t.Fatalf("apiKeyIDFromRoute(%q => %q) = %q, want %q", _route, _normalized, _got, _want)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestObservedReactionMSDoesNotFallbackToDuration(t *testing.T) {
+	if _got := observedReactionMS(proxy.ChatMetrics{}); _got != 0 {
+		t.Fatalf("observedReactionMS without first token = %.0f, want 0", _got)
+	}
+	if _got := observedReactionMS(proxy.ChatMetrics{FirstResponseMS: 1234}); _got != 1234 {
+		t.Fatalf("observedReactionMS with first token = %.0f, want 1234", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestNormalizeOpenAICodexModelID(t *testing.T) {
+	if _got := normalizeOpenAICodexModelID(" GPT-5.6-Sol "); _got != "gpt-5.6-sol" {
+		t.Fatalf("normalizeOpenAICodexModelID = %q, want gpt-5.6-sol", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSyncProviderModelAliasesExposesFetchedModels(t *testing.T) {
+	_provider := domain.LLMProviderConfig{
+		ID:      "local",
+		Name:    "Local",
+		Kind:    "llamacpp",
+		Enabled: true,
+		Models: []domain.LLMModelConfig{
+			{
+				Name:    "gemma-default.gguf",
+				Aliases: []string{"auto", "llamacpp", "stale-model.gguf"},
+			},
+		},
+	}
+
+	syncProviderModelAliases(&_provider, []string{"ggml-org/gemma-4-E4B-it-GGUF", "gemma-4-12B-it-Q4_K_M.gguf"})
+	_names := providerExposedModelNames(&_provider)
+	_want := map[string]bool{
+		"ggml-org/gemma-4-E4B-it-GGUF": false,
+		"gemma-4-12B-it-Q4_K_M.gguf":   false,
+	}
+	for _, _name := range _names {
+		if _, _ok := _want[_name]; _ok {
+			_want[_name] = true
+		}
+		if _name == "auto" || _name == "llamacpp" {
+			t.Fatalf("providerExposedModelNames leaked internal alias %q", _name)
+		}
+		if _name == "stale-model.gguf" {
+			t.Fatalf("providerExposedModelNames kept stale fetched alias %q", _name)
+		}
+		if _name == "gemma-default.gguf" {
+			t.Fatalf("providerExposedModelNames kept stale primary model %q", _name)
+		}
+	}
+	for _name, _seen := range _want {
+		if !_seen {
+			t.Fatalf("providerExposedModelNames missing %q from %v", _name, _names)
+		}
+	}
+	if _provider.Models[0].Name != "gemma-4-12B-it-Q4_K_M.gguf" {
+		t.Fatalf("primary model = %q, want first fetched public model", _provider.Models[0].Name)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestSyncProviderModelAliasesRemovesUnavailablePublicModels(t *testing.T) {
+	_provider := domain.LLMProviderConfig{
+		ID:      "codex",
+		Name:    "Codex",
+		Kind:    "openai-codex",
+		Enabled: true,
+		Models: []domain.LLMModelConfig{{
+			Name:    "gpt-5.6-sol",
+			Aliases: []string{"auto", "openai-codex", "gpt-5.6", "gpt-5.6-sol"},
+		}},
+	}
+
+	syncProviderModelAliases(&_provider, []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.5"})
+
+	for _, _alias := range _provider.Models[0].Aliases {
+		if _alias == "gpt-5.6" {
+			t.Fatalf("stale unavailable alias was retained: %#v", _provider.Models[0].Aliases)
+		}
+	}
+	if _provider.Models[0].Name != "gpt-5.6-sol" {
+		t.Fatalf("provider model = %q, want existing supported model", _provider.Models[0].Name)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestMergeProviderConfigDropsPreviousPublicModelAliases(t *testing.T) {
+	_old := domain.LLMProviderConfig{
+		ID:      "local",
+		Name:    "Local",
+		Kind:    "llamacpp",
+		Enabled: true,
+		Models: []domain.LLMModelConfig{
+			{
+				Name:    "previous-model.gguf",
+				Aliases: []string{"auto", "llamacpp", "old-fetched-model.gguf"},
+			},
+		},
+	}
+	_form := ProviderForm{
+		ID:      "local",
+		Name:    "Local",
+		Kind:    "llamacpp",
+		Host:    "http://127.0.0.1:8080",
+		ChatAPI: "/v1/chat/completions",
+		Model:   "new-model.gguf",
+		Enabled: true,
+	}
+
+	_updated := mergeProviderConfig(_old, _form)
+	_names := providerExposedModelNames(&_updated)
+	for _, _name := range _names {
+		if _name == "previous-model.gguf" || _name == "old-fetched-model.gguf" {
+			t.Fatalf("providerExposedModelNames kept stale model %q in %v", _name, _names)
+		}
+	}
+	if len(_updated.Models) == 0 || _updated.Models[0].Name != "new-model.gguf" {
+		t.Fatalf("updated model = %#v, want new-model.gguf", _updated.Models)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 釘住的 provider 當下不可選時要降級重新負載平衡，而不是讓選擇階段回 503。
+func TestConversationAffinityDropsWhenPinnedProviderUnavailable(t *testing.T) {
+	_client := proxy.NewClient()
+	_handler := &HTTPAPI{Client: _client, Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "provider-a", Enabled: false, BaseURL: "http://a"},
+		{ID: "provider-b", Enabled: true, BaseURL: "http://b"},
+	}})}
+
+	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_request = _request.WithContext(proxy.WithResponseRouteOwner(_request.Context(), "key:owner-1"))
+	_client.RecordPromptCacheRoute(proxy.PromptCacheRouteID("conv-uuid"), "provider-a", "gpt-5.6-luna", proxy.ResponseRouteOwner(_request))
+
+	_selection := domain.ChatCompletionRequest{Model: "AUTO"}
+	_body := []byte(`{"model":"AUTO","prompt_cache_key":"conv-uuid","input":[{"type":"reasoning","encrypted_content":"x"}]}`)
+	_pinned, _dropped := _handler.applyConversationAffinity(&_selection, _body, _request)
+	if _pinned || !_dropped {
+		t.Fatalf("pinned=%v dropped=%v, want the pin dropped so another provider can serve", _pinned, _dropped)
+	}
+	if _selection.ProviderID != "" {
+		t.Fatalf("provider must be left unpinned, got %q", _selection.ProviderID)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 容量冷卻改為可調：未設定時沿用預設值，設定後即時生效。
+func TestProviderCapacityCooldownIsConfigurable(t *testing.T) {
+	_path := filepath.Join(t.TempDir(), "advanced_settings.json")
+	_handler := &HTTPAPI{Client: proxy.NewClient(), AdvancedSettingsConfigPath: _path}
+
+	if _got := _handler.providerCapacityCooldown(); _got != defaultProviderCapacityCooldown {
+		t.Fatalf("default cooldown = %s, want %s", _got, defaultProviderCapacityCooldown)
+	}
+
+	_recorder := httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"providerCapacityCooldownSeconds":3}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("save status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+	if _got := _handler.providerCapacityCooldown(); _got != 3*time.Second {
+		t.Fatalf("configured cooldown = %s, want 3s", _got)
+	}
+
+	// 超出範圍必須被擋下，且不影響既有設定。
+	_recorder = httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"providerCapacityCooldownSeconds":9999}`))
+	if _recorder.Code != http.StatusBadRequest {
+		t.Fatalf("out-of-range status = %d, want 400", _recorder.Code)
+	}
+	if _got := _handler.providerCapacityCooldown(); _got != 3*time.Second {
+		t.Fatalf("cooldown after rejected save = %s, want 3s preserved", _got)
+	}
+}

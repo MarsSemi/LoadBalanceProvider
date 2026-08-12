@@ -1,0 +1,21 @@
+/build/
+/dist/
+/bin/
+/cmd/
+
+# Local configuration
+/agent.properties
+/data/api_keys.json
+/data/llm_proxy.json
+
+# Runtime data
+/data/history/
+/data/system/resource_usage/
+*.log
+
+# Legacy version-control metadata
+.svn/
+
+# macOS metadata
+.DS_Store
+**/.DS_Store

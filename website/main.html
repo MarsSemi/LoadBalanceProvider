@@ -1,0 +1,4769 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LLM Proxy 儀表版</title>
+  <script src="i18n.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --panel: #ffffff;
+      --surface: #f3f3f3;
+      --line: #dedede;
+      --line-soft: #ececec;
+      --text: #171717;
+      --muted: #747474;
+      --muted-strong: #555555;
+      --active: #111111;
+      --green: #2f7f58;
+      --red: #b44931;
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    body::-webkit-scrollbar {
+      display: none;
+    }
+
+    .nav::-webkit-scrollbar,
+    .embedded-frame::-webkit-scrollbar,
+    .settings-content::-webkit-scrollbar {
+      display: none;
+    }
+
+    a {
+      color: inherit;
+      text-decoration: none;
+    }
+
+    button,
+    select {
+      font: inherit;
+    }
+
+    .topbar {
+      height: 70px;
+      display: grid;
+      grid-template-columns: minmax(180px, 260px) 1fr minmax(180px, 260px);
+      align-items: center;
+      gap: 24px;
+      padding: 0 36px;
+      background: rgba(250, 250, 250, .92);
+      border-bottom: 1px solid var(--line-soft);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+      background: #050505;
+      color: #fff;
+      display: grid;
+      place-items: center;
+      font-weight: 900;
+      line-height: 1;
+    }
+
+    .brand-text {
+      display: grid;
+      gap: 1px;
+    }
+
+    .brand-name {
+      font-size: 19px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .brand-version {
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .nav {
+      justify-self: center;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      background: #eeeeee;
+      border: 1px solid #e7e7e7;
+      border-radius: 999px;
+      max-width: 100%;
+      overflow-x: auto;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 14px;
+      border-radius: 999px;
+      color: #444;
+      font-size: 14px;
+      white-space: nowrap;
+    }
+
+    .nav-link.active {
+      color: #111;
+      background: #fff;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, .08);
+      font-weight: 700;
+    }
+
+    .nav-link svg,
+    .top-action svg,
+    .section-icon {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .top-actions {
+      justify-self: end;
+      display: inline-flex;
+      align-items: center;
+      gap: 18px;
+      color: #444;
+    }
+
+    .top-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      min-height: 34px;
+      padding: 0 2px;
+      cursor: pointer;
+    }
+
+    main {
+      width: min(1232px, calc(100vw - 72px));
+      margin: 44px auto 64px;
+    }
+
+    .view {
+      display: none;
+    }
+
+    .view.active {
+      display: block;
+    }
+
+    .hero-row {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 30px;
+    }
+
+    .eyebrow {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      line-height: 1.15;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .segmented {
+      display: inline-flex;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: #fff;
+      height: 32px;
+    }
+
+    .segment {
+      border: 0;
+      background: #fff;
+      min-width: 58px;
+      padding: 0 12px;
+      color: var(--muted-strong);
+      cursor: pointer;
+    }
+
+    .segment.active {
+      background: var(--active);
+      color: #fff;
+    }
+
+    .ghost-button {
+      border: 0;
+      background: transparent;
+      color: var(--muted-strong);
+      height: 32px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    select {
+      height: 32px;
+      min-width: 194px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      padding: 0 12px;
+    }
+
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 24px;
+      margin-bottom: 32px;
+    }
+
+    .metric-card {
+      min-height: 142px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      display: grid;
+      place-items: center;
+      text-align: center;
+      padding: 24px;
+    }
+
+    .metric-card-button {
+      width: 100%;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+      appearance: none;
+      transition: border-color .15s ease, background .15s ease, box-shadow .15s ease;
+    }
+
+    .metric-card-button:hover {
+      border-color: #bdbdbd;
+      background: #fcfcfc;
+    }
+
+    .metric-card-button:focus-visible {
+      outline: 2px solid #2f7f58;
+      outline-offset: 3px;
+    }
+
+    .metric-label {
+      color: #aaa;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+
+    .metric-value {
+      font-size: clamp(34px, 4.2vw, 50px);
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      overflow: hidden;
+      margin-bottom: 32px;
+    }
+
+    .panel-header {
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 0 24px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      color: #565656;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .04em;
+    }
+
+    .panel-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .panel-header-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 16px;
+      min-width: 0;
+    }
+
+    .system-update-button {
+      height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      font-weight: 800;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .system-update-button:hover {
+      background: #f5f5f5;
+    }
+
+    .system-update-button svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .provider-scroll-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .provider-scroll-button {
+      width: 30px;
+      height: 30px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .provider-scroll-button:disabled {
+      color: #bbb;
+      background: #f7f7f7;
+      cursor: not-allowed;
+      opacity: .65;
+    }
+
+    .provider-scroll-button svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 2.4;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .speed-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .speed-item {
+      min-height: 102px;
+      padding: 28px 24px 24px;
+    }
+
+    .speed-item + .speed-item {
+      border-left: 1px solid var(--line-soft);
+    }
+
+    .small-label {
+      color: #888;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .small-value {
+      font-size: 25px;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .models-body {
+      min-height: 86px;
+      display: grid;
+      place-items: center;
+      color: #999;
+      font-size: 14px;
+    }
+
+    .provider-list {
+      display: flex;
+      gap: 0;
+      overflow-x: auto;
+      overflow-y: hidden;
+      scroll-behavior: smooth;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .provider-list::-webkit-scrollbar {
+      display: none;
+    }
+
+    .provider-cell {
+      flex: 0 0 25%;
+      min-width: 260px;
+      padding: 18px 24px;
+      min-height: 98px;
+      border-top: 1px solid var(--line-soft);
+      border-right: 1px solid var(--line-soft);
+      cursor: default;
+    }
+
+    .provider-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      margin-bottom: 10px;
+      min-width: 0;
+    }
+
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--green);
+      flex: 0 0 auto;
+      box-shadow: 0 0 0 2px rgba(46, 132, 93, .12);
+    }
+
+    .status-dot.warning {
+      background: #d8a100;
+      box-shadow: 0 0 0 2px rgba(216, 161, 0, .16);
+    }
+
+    .status-dot.danger {
+      background: #c73b32;
+      box-shadow: 0 0 0 2px rgba(199, 59, 50, .16);
+    }
+
+    .status-dot.auth {
+      background: #7c3aed;
+      box-shadow: 0 0 0 2px rgba(124, 58, 237, .16);
+    }
+
+    .status-dot.off {
+      background: #bbb;
+      box-shadow: none;
+    }
+
+    .provider-meta {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .storage {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      color: #777;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+
+    .bar {
+      width: 96px;
+      height: 7px;
+      border-radius: 999px;
+      background: #e4e4e4;
+      overflow: hidden;
+    }
+
+    .bar-fill {
+      height: 100%;
+      width: 0%;
+      background: #111;
+    }
+
+    .empty {
+      flex: 1 0 100%;
+      min-height: 86px;
+      display: grid;
+      place-items: center;
+      color: #aaa;
+    }
+
+    .usage-tooltip {
+      position: fixed;
+      z-index: 50;
+      width: min(320px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      box-shadow: 0 18px 48px rgba(0, 0, 0, .16);
+      padding: 14px;
+      color: var(--text);
+      pointer-events: none;
+    }
+
+    .usage-tooltip[hidden] {
+      display: none;
+    }
+
+    .usage-tooltip-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      margin-bottom: 10px;
+    }
+
+    .usage-tooltip-title svg {
+      width: 15px;
+      height: 15px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .usage-tooltip-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 5px 0;
+      border-top: 1px solid #f0f0f0;
+      font-size: 13px;
+    }
+
+    .usage-tooltip-row:first-of-type {
+      border-top: 0;
+    }
+
+    .usage-tooltip-label {
+      color: #777;
+    }
+
+    .usage-tooltip-value {
+      font-weight: 800;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .embedded-frame {
+      width: 100%;
+      height: calc(100vh - 122px);
+      min-height: 760px;
+      border: 0;
+      border-radius: 16px;
+      background: #f7f8fa;
+      display: block;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .placeholder-panel {
+      min-height: 360px;
+      display: grid;
+      place-items: center;
+      color: #999;
+      font-size: 15px;
+    }
+
+    .settings-shell {
+      display: grid;
+      grid-template-columns: 220px minmax(0, 1fr);
+      min-height: 560px;
+    }
+
+    .settings-nav {
+      padding: 18px;
+      border-right: 1px solid var(--line-soft);
+      background: #fbfbfb;
+    }
+
+    .settings-nav-button {
+      width: 100%;
+      height: 42px;
+      border: 0;
+      border-radius: var(--radius);
+      background: transparent;
+      color: #555;
+      text-align: left;
+      padding: 0 14px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .settings-nav-button.active {
+      background: var(--active);
+      color: #fff;
+    }
+
+    .settings-content {
+      padding: 24px;
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .settings-page {
+      display: none;
+    }
+
+    .settings-page.active {
+      display: block;
+    }
+
+    .settings-title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .settings-title {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.2;
+      font-weight: 900;
+    }
+
+    .settings-card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      overflow: hidden;
+      margin-bottom: 18px;
+    }
+
+    .settings-card-header {
+      width: 100%;
+      height: 48px;
+      border: 0;
+      border-bottom: 1px solid var(--line-soft);
+      background: #f7f7f7;
+      color: #333;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 16px;
+      font: inherit;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .settings-card-header svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      transition: transform .16s ease;
+    }
+
+    .settings-card.collapsed .settings-card-header {
+      border-bottom: 0;
+    }
+
+    .settings-card.collapsed .settings-card-header svg {
+      transform: rotate(-90deg);
+    }
+
+    .settings-card.collapsed .settings-card-body {
+      display: none;
+    }
+
+    .settings-card-body {
+      padding: 18px;
+    }
+
+    .settings-card-title {
+      min-height: 48px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #f7f7f7;
+      color: #333;
+      display: flex;
+      align-items: center;
+      padding: 0 16px;
+      font-weight: 900;
+    }
+
+    .settings-parameter-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .settings-parameter-note {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .mcp-endpoint-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      margin-top: 10px;
+    }
+
+    .mcp-endpoint-code {
+      min-width: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f8f8f8;
+      padding: 11px 12px;
+      color: #333;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .mcp-tool-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .mcp-tool-chip {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fafafa;
+      padding: 6px 10px;
+      color: #555;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+    }
+
+    .field {
+      display: grid;
+      gap: 7px;
+    }
+
+    .field label,
+    .field > span {
+      font-size: 13px;
+      font-weight: 800;
+      color: #333;
+    }
+
+    .text-input {
+      width: 100%;
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      padding: 0 12px;
+      font: inherit;
+    }
+
+    .text-area {
+      width: 100%;
+      min-height: 170px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: var(--text);
+      padding: 12px;
+      font: inherit;
+      resize: vertical;
+      line-height: 1.5;
+    }
+
+    .field-help {
+      color: #777;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .settings-option-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .settings-option-title {
+      font-size: 15px;
+      font-weight: 900;
+      margin-bottom: 6px;
+    }
+
+    .settings-option-copy {
+      color: #666;
+      font-size: 13px;
+      line-height: 1.5;
+      max-width: 680px;
+    }
+
+    .language-select {
+      width: min(240px, 42vw);
+      min-width: 190px;
+      height: 40px;
+      flex: 0 0 auto;
+    }
+
+    .version-info-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .version-info-item {
+      min-width: 0;
+      border: 1px solid var(--line-soft);
+      border-radius: var(--radius);
+      padding: 12px;
+      background: #fafafa;
+    }
+
+    .version-info-label {
+      color: #777;
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .version-info-value {
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 900;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .toggle-switch {
+      position: relative;
+      display: inline-flex;
+      width: 54px;
+      height: 30px;
+      flex: 0 0 auto;
+    }
+
+    .toggle-switch input {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .toggle-switch span {
+      width: 100%;
+      height: 100%;
+      border-radius: 999px;
+      background: #d1d5db;
+      cursor: pointer;
+      transition: background .16s ease;
+      box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .06);
+    }
+
+    .toggle-switch span::after {
+      content: "";
+      position: absolute;
+      width: 24px;
+      height: 24px;
+      left: 3px;
+      top: 3px;
+      border-radius: 50%;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+      transition: transform .16s ease;
+    }
+
+    .toggle-switch input:checked + span {
+      background: #2fbd68;
+    }
+
+    .toggle-switch input:checked + span::after {
+      transform: translateX(24px);
+    }
+
+    .toggle-switch input:disabled + span {
+      cursor: wait;
+      opacity: .62;
+    }
+
+    .settings-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .primary-button,
+    .danger-button,
+    .soft-button {
+      height: 40px;
+      border-radius: var(--radius);
+      padding: 0 14px;
+      font-weight: 800;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .primary-button {
+      border: 1px solid var(--active);
+      background: var(--active);
+      color: #fff;
+    }
+
+    .danger-button {
+      border: 1px solid #d7b6ae;
+      background: #fff;
+      color: var(--red);
+    }
+
+    .soft-button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: #333;
+    }
+
+    .soft-button:disabled,
+    .danger-button:disabled,
+    .primary-button:disabled {
+      opacity: .45;
+      cursor: default;
+    }
+
+    .generated-key {
+      display: none;
+      margin-top: 14px;
+      padding: 14px;
+      border: 1px solid #cfe4d7;
+      border-radius: var(--radius);
+      background: #f5fbf7;
+    }
+
+    .generated-key.active {
+      display: block;
+    }
+
+    .generated-key-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .icon-button {
+      width: 34px;
+      height: 34px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fff;
+      color: #333;
+      cursor: pointer;
+    }
+
+    .icon-button svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .generated-key code {
+      display: block;
+      margin-top: 8px;
+      padding: 10px;
+      border-radius: var(--radius);
+      background: #fff;
+      word-break: break-all;
+      color: #175d3c;
+      border: 1px solid #dcece2;
+    }
+
+    .key-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      table-layout: fixed;
+    }
+
+    .key-table-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line-soft);
+      background: #fbfbfb;
+    }
+
+    .key-filter-group,
+    .key-pagination-controls {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .key-filter-label {
+      color: #777;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .06em;
+    }
+
+    .key-filter-select {
+      min-width: 180px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      color: var(--text);
+      padding: 0 34px 0 12px;
+      font: inherit;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    .key-page-status {
+      min-width: 76px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: #444;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .key-page-button {
+      width: 36px;
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      color: #333;
+      display: inline-grid;
+      place-items: center;
+      cursor: pointer;
+    }
+
+    .key-page-button:disabled {
+      color: #bbb;
+      background: #f6f6f6;
+      cursor: not-allowed;
+    }
+
+    .key-page-button svg {
+      width: 17px;
+      height: 17px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .key-table th,
+    .key-table td {
+      padding: 16px 18px;
+      border-top: 1px solid var(--line-soft);
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .key-table th:nth-child(1),
+    .key-table td:nth-child(1) {
+      width: 18%;
+      padding-left: 24px;
+    }
+
+    .key-table th:nth-child(2),
+    .key-table td:nth-child(2) {
+      width: 25%;
+    }
+
+    .key-table th:nth-child(3),
+    .key-table td:nth-child(3) {
+      width: 9%;
+    }
+
+    .key-table th:nth-child(4),
+    .key-table td:nth-child(4) {
+      width: 12%;
+      white-space: nowrap;
+    }
+
+    .key-table th:nth-child(5),
+    .key-table td:nth-child(5) {
+      width: 12%;
+    }
+
+    .key-table th:nth-child(6),
+    .key-table td:nth-child(6) {
+      width: 184px;
+      padding-right: 24px;
+    }
+
+    .key-table th {
+      color: #777;
+      font-size: 12px;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+      background: #fbfbfb;
+      border-top: 0;
+    }
+
+    .key-sort-button {
+      border: 0;
+      background: transparent;
+      padding: 0;
+      color: inherit;
+      font: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+    }
+
+    .key-sort-indicator {
+      color: #111;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .key-name {
+      display: inline-block;
+      max-width: 100%;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .key-table code {
+      display: inline-block;
+      max-width: 100%;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      vertical-align: middle;
+    }
+
+    .key-table code.key-mask {
+      max-width: 22ch;
+    }
+
+    .key-created {
+      display: inline-block;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .key-actions {
+      display: inline-flex;
+      gap: 8px;
+      justify-content: flex-end;
+      width: 100%;
+      white-space: nowrap;
+    }
+
+    .key-action-icon {
+      width: 38px;
+      height: 38px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+      color: #222;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, color .15s ease, opacity .15s ease;
+    }
+
+    .key-action-icon:hover:not(:disabled) {
+      background: #f6f6f6;
+      border-color: #cfcfcf;
+    }
+
+    .key-action-icon:disabled {
+      cursor: not-allowed;
+      opacity: .48;
+    }
+
+    .key-action-icon svg {
+      width: 17px;
+      height: 17px;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .key-action-icon.danger {
+      color: var(--danger);
+      border-color: #e8c7be;
+    }
+
+    .key-action-icon.primary {
+      color: #1c6f4d;
+    }
+
+    .key-action-icon.stats {
+      color: #245c86;
+    }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      height: 26px;
+      border-radius: 999px;
+      padding: 0 10px;
+      font-size: 12px;
+      font-weight: 800;
+      color: #23704d;
+      background: #e8f3ed;
+    }
+
+    .status-pill.off {
+      color: #8a4a3d;
+      background: #f7e9e5;
+    }
+
+    .settings-empty {
+      min-height: 120px;
+      display: grid;
+      place-items: center;
+      color: #999;
+      border-top: 1px solid var(--line-soft);
+    }
+
+    .settings-message {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .key-tabs {
+      display: inline-flex;
+      gap: 4px;
+      padding: 4px;
+      margin: 2px 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f8f8f8;
+    }
+
+    .key-tab-button {
+      height: 34px;
+      border: 0;
+      border-radius: 9px;
+      padding: 0 14px;
+      background: transparent;
+      color: #555;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .key-tab-button.active {
+      background: var(--active);
+      color: #fff;
+    }
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 80;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(20, 20, 20, .28);
+      backdrop-filter: blur(8px);
+    }
+
+    .modal-backdrop.active {
+      display: flex;
+    }
+
+    #loadingModal {
+      z-index: 120;
+    }
+
+    .loading-modal {
+      width: min(360px, 100%);
+      padding: 30px 28px;
+      display: grid;
+      justify-items: center;
+      gap: 12px;
+      text-align: center;
+    }
+
+    .loading-spinner {
+      width: 42px;
+      height: 42px;
+      border: 4px solid #dedede;
+      border-top-color: var(--active);
+      border-radius: 50%;
+      animation: loading-spin .8s linear infinite;
+    }
+
+    .loading-title {
+      margin: 2px 0 0;
+      color: var(--text);
+      font-size: 18px;
+      line-height: 1.3;
+      font-weight: 900;
+    }
+
+    .loading-message {
+      min-height: 22px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    @keyframes loading-spin {
+      to { transform: rotate(360deg); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .loading-spinner {
+        animation-duration: 1.6s;
+      }
+    }
+
+    .confirm-modal {
+      width: min(420px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--panel);
+      box-shadow: 0 24px 72px rgba(0, 0, 0, .18);
+      overflow: hidden;
+    }
+
+    .confirm-modal-header {
+      padding: 22px 24px 10px;
+    }
+
+    .confirm-modal-title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.2;
+      font-weight: 900;
+      letter-spacing: 0;
+    }
+
+    .confirm-modal-body {
+      padding: 0 24px 24px;
+      color: var(--muted-strong);
+      line-height: 1.6;
+      font-size: 14px;
+    }
+
+    .system-update-modal {
+      width: min(520px, 100%);
+    }
+
+    .update-package-summary {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px 16px;
+      padding: 14px 16px;
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .update-package-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .update-package-size {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .update-warning {
+      margin: 0;
+      color: var(--muted-strong);
+    }
+
+    .update-progress {
+      display: grid;
+      gap: 8px;
+      margin-top: 18px;
+    }
+
+    .update-progress[hidden] {
+      display: none;
+    }
+
+    .update-progress-track {
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #e6e6e6;
+    }
+
+    .update-progress-bar {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--active);
+      transition: width .18s ease;
+    }
+
+    .update-progress-status {
+      min-height: 22px;
+      color: var(--muted-strong);
+      font-size: 13px;
+    }
+
+    .modal-button:disabled,
+    .system-update-button:disabled {
+      cursor: not-allowed;
+      opacity: .45;
+    }
+
+    .modal-field {
+      display: grid;
+      gap: 8px;
+      color: var(--text);
+      font-weight: 800;
+    }
+
+    .confirm-modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 16px 24px;
+      border-top: 1px solid var(--line-soft);
+      background: #fbfbfb;
+    }
+
+    .key-stats-modal {
+      width: min(760px, 100%);
+    }
+
+    .key-stats-title-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .key-stats-subtitle {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .key-stats-controls {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 0 24px 16px;
+    }
+
+    .key-stats-month {
+      min-width: 132px;
+      text-align: center;
+      font-weight: 900;
+    }
+
+    .key-stats-chart {
+      height: 320px;
+      padding: 0 24px 16px;
+    }
+
+    .key-stats-message {
+      margin: 0;
+      padding: 0 24px 20px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
+
+    .modal-button {
+      height: 38px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+      padding: 0 16px;
+      background: #fff;
+      color: var(--text);
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .modal-button.primary {
+      border-color: var(--active);
+      background: var(--active);
+      color: #fff;
+    }
+
+    @media (max-width: 900px) {
+      .topbar {
+        grid-template-columns: 1fr;
+        height: auto;
+        padding: 16px;
+      }
+
+      .brand,
+      .nav,
+      .top-actions {
+        justify-self: stretch;
+      }
+
+      .top-actions {
+        justify-content: space-between;
+      }
+
+      main {
+        width: min(100% - 32px, 720px);
+        margin-top: 28px;
+      }
+
+      .hero-row {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      .controls {
+        justify-content: flex-start;
+      }
+
+      .metric-grid,
+      .speed-grid,
+      .settings-shell,
+      .form-row,
+      .mcp-endpoint-row,
+      .settings-parameter-grid,
+      .version-info-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .provider-cell {
+        flex-basis: 100%;
+      }
+
+      .settings-nav {
+        border-right: 0;
+        border-bottom: 1px solid var(--line-soft);
+      }
+
+      .speed-item + .speed-item,
+      .provider-cell + .provider-cell {
+        border-left: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="main.html">
+      <div class="brand-mark">LP</div>
+      <div class="brand-text">
+        <div class="brand-name">LLM Proxy</div>
+        <div class="brand-version" id="serviceVersion">載入版本</div>
+      </div>
+    </a>
+
+    <nav class="nav" aria-label="主選單">
+      <a class="nav-link active" href="#dashboard" data-view="dashboardView">
+        <svg viewBox="0 0 24 24"><path d="M4 19V5"></path><path d="M4 19h16"></path><path d="M8 16v-5"></path><path d="M12 16V8"></path><path d="M16 16v-3"></path></svg>
+        儀表版
+      </a>
+      <a class="nav-link" href="#providers" data-view="providersView">
+        <svg viewBox="0 0 24 24"><path d="M12 4v16"></path><path d="M6 8h12"></path><path d="M6 16h12"></path><path d="M8 4h8"></path><path d="M8 20h8"></path></svg>
+        模型來源
+      </a>
+      <a class="nav-link" href="#benchmark" data-view="benchmarkView">
+        <svg viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0"></path><path d="M12 14l4-4"></path><path d="M5 19h14"></path></svg>
+        基準
+      </a>
+      <a class="nav-link" href="#system-monitor" data-view="systemMonitorView">
+        <svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"></path><path d="M4 20h16"></path></svg>
+        系統監看
+      </a>
+      <a class="nav-link" href="#keys" data-view="keysView">
+        <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"></circle><path d="m11 12 8-8"></path><path d="m15 8 3 3"></path><path d="m17 6 2 2"></path></svg>
+        金鑰管理
+      </a>
+      <a class="nav-link" href="#settings" data-view="settingsView">
+        <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7.5 7.5 0 0 0-2-1.2L14.2 3h-4.4l-.3 2.7a7.5 7.5 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7.5 7.5 0 0 0 2 1.2l.3 2.7h4.4l.3-2.7a7.5 7.5 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"></path></svg>
+        設定
+      </a>
+    </nav>
+
+    <div class="top-actions">
+      <button class="top-action" type="button" id="themeButton" title="切換外觀" aria-label="切換外觀">
+        <svg viewBox="0 0 24 24"><path d="M12 3v2"></path><path d="M12 19v2"></path><path d="M3 12h2"></path><path d="M19 12h2"></path><path d="m5.6 5.6 1.4 1.4"></path><path d="m17 17 1.4 1.4"></path><path d="m18.4 5.6-1.4 1.4"></path><path d="m7 17-1.4 1.4"></path><circle cx="12" cy="12" r="3"></circle></svg>
+      </button>
+      <button class="top-action" type="button" id="logoutButton">
+        <svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><path d="M16 17l5-5-5-5"></path><path d="M21 12H9"></path></svg>
+        登出
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="view active" id="dashboardView">
+      <section class="hero-row">
+        <div>
+          <div class="eyebrow">儀表版</div>
+          <h1>服務統計</h1>
+        </div>
+
+        <div class="controls">
+          <div class="segmented" role="group" aria-label="統計區間">
+            <button class="segment active" type="button" data-metric-mode="session">工作階段</button>
+            <button class="segment" type="button" data-metric-mode="cumulative">累計</button>
+          </div>
+          <button class="ghost-button" type="button" id="refreshButton">
+            <svg class="section-icon" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6"></path><path d="M3 12a9 9 0 0 1 15.6-6"></path><path d="M3 19v-5h5"></path><path d="M21 5v5h-5"></path></svg>
+            歸零
+          </button>
+          <select id="providerFilter" aria-label="Provider 篩選">
+            <option value="">所有模型</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="metric-grid" aria-label="核心指標">
+        <article class="metric-card">
+          <div>
+            <div class="metric-label">Provider 總數</div>
+            <div class="metric-value" id="providerCount">0</div>
+          </div>
+        </article>
+        <article class="metric-card">
+          <div>
+            <div class="metric-label" id="enabledCountLabel">啟用 Provider</div>
+            <div class="metric-value" id="enabledCount">0</div>
+          </div>
+        </article>
+        <article class="metric-card">
+          <div>
+            <div class="metric-label" id="activeRequestsLabel">目前活躍請求</div>
+            <div class="metric-value" id="activeRequests">0</div>
+          </div>
+        </article>
+        <button class="metric-card metric-card-button" type="button" id="totalRemainingCard" title="查看每日總用量百分比" aria-label="查看可使用量的每日用量百分比" aria-haspopup="dialog">
+          <div>
+            <div class="metric-label">可使用量</div>
+            <div class="metric-value" id="totalRemaining" title="無限制">∞</div>
+          </div>
+        </button>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg class="section-icon" viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0"></path><path d="M12 14l4-4"></path><path d="M5 19h14"></path></svg>
+            平均速度
+          </div>
+        </header>
+        <div class="speed-grid">
+          <div class="speed-item">
+            <div class="small-label">反應時間</div>
+            <div class="small-value" id="reactionTime">00 分 00 秒</div>
+          </div>
+          <div class="speed-item">
+            <div class="small-label">平均處理時間</div>
+            <div class="small-value" id="avgDuration">00 分 00 秒</div>
+          </div>
+          <div class="speed-item">
+            <div class="small-label">Token 生成速度</div>
+            <div class="small-value" id="tokenSpeed">0 tok/s</div>
+          </div>
+          <div class="speed-item">
+            <div class="small-label">Token 輸出速度</div>
+            <div class="small-value" id="streamOutSpeed">0 tok/s</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg class="section-icon" viewBox="0 0 24 24"><path d="M4 12h3l2-7 4 14 2-7h5"></path></svg>
+            活躍模型
+          </div>
+          <div class="panel-header-actions">
+            <div class="provider-scroll-controls" aria-label="Provider 列表移動">
+              <button class="provider-scroll-button" type="button" id="providerScrollLeft" aria-label="向左移動 Provider 列表" disabled>
+                <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"></path></svg>
+              </button>
+              <button class="provider-scroll-button" type="button" id="providerScrollRight" aria-label="向右移動 Provider 列表" disabled>
+                <svg viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"></path></svg>
+              </button>
+            </div>
+            <div class="storage"><span class="bar"><span class="bar-fill" id="loadBar"></span></span><span id="loadText">0 / 0</span></div>
+          </div>
+	        </header>
+	        <div class="provider-list" id="providerList">
+	          <div class="empty">尚未載入模型</div>
+	        </div>
+	      </section>
+	    </section>
+
+    <section class="view" id="providersView">
+      <iframe class="embedded-frame" title="模型來源" data-src="providers.html" loading="lazy"></iframe>
+    </section>
+
+    <section class="view" id="benchmarkView">
+      <iframe class="embedded-frame" title="基準測試" data-src="benchmark.html" loading="lazy"></iframe>
+    </section>
+
+    <section class="view" id="systemMonitorView">
+      <iframe class="embedded-frame" title="系統資源監看" data-src="system-monitor.html" loading="lazy"></iframe>
+    </section>
+
+    <section class="view" id="keysView">
+      <iframe class="embedded-frame" title="金鑰管理" data-src="keys.html" loading="lazy"></iframe>
+    </section>
+
+    <section class="view" id="settingsView">
+      <section class="panel">
+        <header class="panel-header">
+          <div class="panel-title">
+            <svg class="section-icon" viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"></path><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7.5 7.5 0 0 0-2-1.2L14.2 3h-4.4l-.3 2.7a7.5 7.5 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7.5 7.5 0 0 0 2 1.2l.3 2.7h4.4l.3-2.7a7.5 7.5 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"></path></svg>
+            設定
+          </div>
+          <div class="panel-header-actions">
+            <button class="system-update-button" type="button" id="selectSystemUpdateButton" title="上傳 ZIP 更新系統">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.9-4"></path><path d="M4 4v5h5"></path><path d="M4 13a8 8 0 0 0 14.9 4"></path><path d="M20 20v-5h-5"></path></svg>
+              <span>系統更新</span>
+            </button>
+            <input id="systemUpdateFileInput" type="file" accept=".zip,application/zip" hidden>
+          </div>
+        </header>
+        <div class="settings-shell">
+          <aside class="settings-nav" aria-label="設定功能">
+            <button class="settings-nav-button active" type="button" data-settings-page="generalSettings">一般</button>
+            <button class="settings-nav-button" type="button" data-settings-page="advancedSettings">進階</button>
+            <button class="settings-nav-button" type="button" data-settings-page="mcpSettings">MCP</button>
+          </aside>
+          <div class="settings-content">
+            <section class="settings-page active" id="generalSettings">
+              <div class="settings-title-row">
+                <h2 class="settings-title">一般</h2>
+              </div>
+              <div class="settings-message" id="generalStatusMessage">尚未載入一般設定。</div>
+              <section class="settings-card">
+                <div class="settings-card-body">
+                  <div class="settings-option-row">
+                    <div>
+                      <div class="settings-option-title">介面語言</div>
+                      <div class="settings-option-copy">選擇介面顯示語言。Auto 會依瀏覽器或作業系統語言自動判斷。</div>
+                    </div>
+                    <select class="language-select" id="languageSelect" aria-label="選擇介面語言">
+                      <option value="auto">Auto</option>
+                      <option value="zh-TW">繁體中文</option>
+                      <option value="zh-CN">简体中文</option>
+                      <option value="en">English</option>
+                      <option value="ja">日本語</option>
+                      <option value="ko">한국어</option>
+                    </select>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-body">
+                  <div class="settings-option-row">
+                    <div>
+                      <div class="settings-option-title">模型列表顯示</div>
+                      <div class="settings-option-copy">關閉時，對外模型列表只顯示 AUTO。開啟時，會列出所有啟用來源提供的模型；同名模型仍由負載平衡自動挑選。</div>
+                    </div>
+                    <label class="toggle-switch" aria-label="列出來源支援模型">
+                      <input id="showProviderModelsSwitch" type="checkbox">
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-body">
+                  <div class="settings-option-title">版本資訊</div>
+                  <div class="version-info-grid">
+                    <div class="version-info-item">
+                      <div class="version-info-label">版本</div>
+                      <div class="version-info-value" id="settingsVersionValue">載入中</div>
+                    </div>
+                    <div class="version-info-item">
+                      <div class="version-info-label">服務</div>
+                      <div class="version-info-value" id="settingsVersionName">LLM Proxy</div>
+                    </div>
+                    <div class="version-info-item">
+                      <div class="version-info-label">啟動時間</div>
+                      <div class="version-info-value" id="settingsVersionStartedAt">-</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </section>
+            <section class="settings-page" id="mcpSettings">
+              <div class="settings-title-row">
+                <h2 class="settings-title">MCP</h2>
+              </div>
+              <div class="settings-message" id="mcpStatusMessage">尚未載入 MCP 設定。</div>
+              <section class="settings-card">
+                <div class="settings-card-title">Streamable HTTP 端點</div>
+                <div class="settings-card-body">
+                  <div class="settings-option-title">MCP 連線位址</div>
+                  <div class="settings-option-copy">請先在金鑰管理核發 MCP 專用金鑰，再透過 Authorization: Bearer 或 X-API-Key 連線。Chat 與登入金鑰無法呼叫 MCP。</div>
+                  <div class="mcp-endpoint-row">
+                    <code class="mcp-endpoint-code" id="mcpEndpointValue">/mcp/</code>
+                    <button class="soft-button" type="button" id="copyMcpEndpointButton">複製位址</button>
+                  </div>
+                  <div class="version-info-grid" style="margin-top: 14px;">
+                    <div class="version-info-item">
+                      <div class="version-info-label">傳輸</div>
+                      <div class="version-info-value" id="mcpTransportValue">Streamable HTTP</div>
+                    </div>
+                    <div class="version-info-item">
+                      <div class="version-info-label">協定版本</div>
+                      <div class="version-info-value" id="mcpProtocolValue">2025-11-25</div>
+                    </div>
+                    <div class="version-info-item">
+                      <div class="version-info-label">可用工具</div>
+                      <div class="version-info-value" id="mcpToolCountValue">-</div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-body">
+                  <div class="settings-option-row">
+                    <div>
+                      <div class="settings-option-title">啟用 MCP</div>
+                      <div class="settings-option-copy">開啟標準 MCP Streamable HTTP 端點。關閉後，既有 MCP 連線會收到服務未啟用錯誤。</div>
+                    </div>
+                    <label class="toggle-switch" aria-label="啟用 MCP">
+                      <input id="mcpEnabledSwitch" type="checkbox">
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-body">
+                  <div class="settings-option-row">
+                    <div>
+                      <div class="settings-option-title">唯讀模式</div>
+                      <div class="settings-option-copy">只公開查詢工具；Provider、設定、基準測試、通知、推論與系統更新等會改變狀態的工具不會出現在 tools/list。</div>
+                    </div>
+                    <label class="toggle-switch" aria-label="MCP 唯讀模式">
+                      <input id="mcpReadOnlySwitch" type="checkbox">
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-title">允許的瀏覽器 Origin</div>
+                <div class="settings-card-body">
+                  <label class="field">
+                    <span>額外允許 Origin（每行一個）</span>
+                    <textarea class="text-area" id="mcpAllowedOrigins" spellcheck="false" placeholder="https://client.example.com" style="min-height: 110px;"></textarea>
+                  </label>
+                  <p class="settings-parameter-note">未帶 Origin 的原生 MCP Client 與同源瀏覽器請求會自動允許；跨來源瀏覽器連線必須列在此處，以防止 DNS rebinding。</p>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-title">目前公開工具</div>
+                <div class="settings-card-body">
+                  <div class="settings-option-copy">金鑰管理固定排除，不受唯讀模式或其他設定影響。</div>
+                  <div class="mcp-tool-list" id="mcpToolList"></div>
+                  <div class="settings-actions">
+                    <button class="soft-button" type="button" id="reloadMcpButton">重新載入</button>
+                    <button class="primary-button" type="button" id="saveMcpButton">儲存 MCP 設定</button>
+                  </div>
+                </div>
+              </section>
+            </section>
+            <section class="settings-page" id="advancedSettings">
+              <div class="settings-title-row">
+                <h2 class="settings-title">進階</h2>
+              </div>
+              <div class="settings-message" id="advancedStatusMessage">尚未載入進階設定。</div>
+              <section class="settings-card">
+                <div class="settings-card-title">對話黏著與路由快取</div>
+                <div class="settings-card-body">
+                  <div class="settings-parameter-grid">
+                    <label class="field">
+                      <span>對話黏著時間（分鐘）</span>
+                      <input class="text-input" id="conversationAffinityTTLMinutes" type="number" min="1" max="10080" step="1" inputmode="numeric">
+                    </label>
+                    <label class="field">
+                      <span>配額容忍差（百分點）</span>
+                      <input class="text-input" id="conversationAffinityQuotaTolerancePoints" type="number" min="0" max="100" step="0.5" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>Response 路由上限</span>
+                      <input class="text-input" id="responseRouteMaxEntries" type="number" min="100" max="100000" step="100" inputmode="numeric">
+                    </label>
+                    <label class="field">
+                      <span>容量冷卻（秒）</span>
+                      <input class="text-input" id="providerCapacityCooldownSeconds" type="number" min="1" max="300" step="1" inputmode="numeric">
+                    </label>
+                  </div>
+                  <p class="settings-parameter-note">route 存在時會優先沿用原 Provider；route 遺失、過期、配額差超過容忍值，或原 Provider 正在容量冷卻中時，會移除舊 continuity 後重新負載平衡。容量冷卻是上游回報限流／容量錯誤後暫停選用該 Provider 的秒數，調短可減少對話被迫降級的機會。設定儲存後立即生效。</p>
+                  <div class="settings-actions">
+                    <button class="soft-button" type="button" id="reloadAdvancedButton">重新載入</button>
+                    <button class="primary-button" type="button" id="saveAdvancedButton">儲存參數</button>
+                  </div>
+                </div>
+              </section>
+              <div class="settings-message" id="notificationStatusMessage">尚未載入通知設定。</div>
+              <section class="settings-card" id="notificationTargetCard">
+                <button class="settings-card-header" type="button" id="toggleNotificationTarget" aria-expanded="true" aria-controls="notificationTargetBody">
+                  <span>通知目標</span>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+                </button>
+                <div class="settings-card-body" id="notificationTargetBody">
+                  <div class="field">
+                    <span>通知 URL</span>
+                    <input class="text-input" id="notificationUrl" type="url" placeholder="https://example.com/webhook">
+                  </div>
+                  <div class="field" style="margin-top: 14px;">
+                    <span>API KEY</span>
+                    <input class="text-input" id="notificationApiKey" type="password" placeholder="已設定時留空表示保留原金鑰">
+                  </div>
+                  <div class="field" style="margin-top: 14px;">
+                    <span>PAYLOAD</span>
+                    <textarea class="text-area" id="notificationPayload" spellcheck="false" placeholder="{&quot;text&quot;:&quot;&lt;msg&gt;&quot;}"></textarea>
+                    <div class="field-help">通知內容會替換 payload 中的 <code>&lt;msg&gt;</code>。</div>
+                  </div>
+                  <div class="settings-actions">
+                    <button class="soft-button" type="button" id="reloadNotificationButton">重新載入</button>
+                    <button class="soft-button" type="button" id="testNotificationButton">測試</button>
+                    <button class="primary-button" type="button" id="saveNotificationButton">儲存通知目標</button>
+                  </div>
+                </div>
+              </section>
+            </section>
+            <section class="settings-page" id="keySettings" hidden>
+              <div class="settings-title-row">
+                <h2 class="settings-title">金鑰管理</h2>
+                <button class="soft-button" type="button" id="reloadKeysButton">重新載入</button>
+              </div>
+
+              <div class="key-tabs" role="tablist" aria-label="金鑰類型">
+                <button class="key-tab-button active" type="button" data-key-tab="chat" role="tab" aria-selected="true">Chat 金鑰</button>
+                <button class="key-tab-button" type="button" data-key-tab="mcp" role="tab" aria-selected="false">MCP 金鑰</button>
+                <button class="key-tab-button" type="button" data-key-tab="login" role="tab" aria-selected="false">登入金鑰</button>
+              </div>
+              <div class="settings-message" id="keyStatusMessage">尚未載入金鑰資料。</div>
+
+              <section class="settings-card" id="chatKeyIssueCard">
+                <div class="settings-card-body">
+                  <div class="form-row">
+                    <label class="field">
+                      <span id="embeddedNewApiKeyLabel">Chat API Key 名稱</span>
+                      <input class="text-input" id="newApiKeyName" type="text" placeholder="例如：外部服務、內部測試">
+                    </label>
+                    <button class="primary-button" type="button" id="createApiKeyButton"><span id="embeddedCreateApiKeyLabel">核發 Chat API Key</span></button>
+	                  </div>
+	                  <div class="generated-key" id="generatedKeyBox">
+	                    <div class="generated-key-header">
+	                      <strong>新的 API Key 只會顯示一次</strong>
+	                      <button class="icon-button" type="button" id="copyGeneratedKeyButton" title="複製 API Key" aria-label="複製 API Key">
+	                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+	                      </button>
+	                    </div>
+	                    <code id="generatedKeyValue"></code>
+	                  </div>
+                </div>
+              </section>
+
+              <section class="settings-card">
+                <div class="key-table-toolbar">
+                  <label class="key-filter-group" for="apiKeyTypeFilter">
+                    <span class="key-filter-label">名稱類型</span>
+                    <select class="key-filter-select" id="apiKeyTypeFilter">
+                      <option value="all">全部</option>
+                    </select>
+                  </label>
+                  <div class="key-pagination-controls">
+                    <button class="key-page-button" type="button" id="apiKeyPrevPage" aria-label="上一頁">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+                    </button>
+                    <span class="key-page-status" id="apiKeyPageStatus">1 / 1</span>
+                    <button class="key-page-button" type="button" id="apiKeyNextPage" aria-label="下一頁">
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+                    </button>
+                  </div>
+                </div>
+                <table class="key-table">
+                  <thead>
+                    <tr>
+                      <th><button class="key-sort-button" type="button" data-key-sort="name">名稱 <span class="key-sort-indicator" data-key-sort-indicator="name"></span></button></th>
+                      <th>金鑰</th>
+                      <th>狀態</th>
+                      <th id="apiKeyUsageHeader"><button class="key-sort-button" type="button" data-key-sort="usage">使用次數 <span class="key-sort-indicator" data-key-sort-indicator="usage"></span></button></th>
+                      <th><button class="key-sort-button" type="button" data-key-sort="created">建立時間 <span class="key-sort-indicator" data-key-sort-indicator="created"></span></button></th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="apiKeyTableBody">
+                    <tr><td colspan="6"><div class="settings-empty">尚未載入</div></td></tr>
+                  </tbody>
+                </table>
+              </section>
+            </section>
+          </div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div class="usage-tooltip" id="providerUsageTooltip" role="dialog" aria-label="Provider Usage" hidden></div>
+
+  <div class="modal-backdrop active" id="loadingModal" role="dialog" aria-modal="true" aria-labelledby="loadingTitle">
+    <section class="confirm-modal loading-modal">
+      <div class="loading-spinner" aria-hidden="true"></div>
+      <h2 class="loading-title" id="loadingTitle">正在載入</h2>
+      <p class="loading-message" id="loadingMessage" aria-live="polite">正在取得服務資訊...</p>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="systemUpdateModal" role="dialog" aria-modal="true" aria-labelledby="systemUpdateTitle" hidden>
+    <section class="confirm-modal system-update-modal">
+      <header class="confirm-modal-header">
+        <h2 class="confirm-modal-title" id="systemUpdateTitle">更新 LLM Proxy</h2>
+      </header>
+      <div class="confirm-modal-body">
+        <div class="update-package-summary">
+          <span class="update-package-name" id="systemUpdateFileName">尚未選擇檔案</span>
+          <span class="update-package-size" id="systemUpdateFileSize">-</span>
+        </div>
+        <p class="update-warning">系統會驗證部署包、備份現有程式並重新啟動服務。Provider、金鑰、通知與歷史資料不會被更新包覆蓋。</p>
+        <div class="update-progress" id="systemUpdateProgress" hidden>
+          <div class="update-progress-track" aria-hidden="true">
+            <div class="update-progress-bar" id="systemUpdateProgressBar"></div>
+          </div>
+          <div class="update-progress-status" id="systemUpdateStatus" aria-live="polite"></div>
+        </div>
+      </div>
+      <footer class="confirm-modal-actions">
+        <button class="modal-button" type="button" id="systemUpdateCancelButton">取消</button>
+        <button class="modal-button primary" type="button" id="systemUpdateConfirmButton">上傳並更新</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="resetConfirmModal" role="dialog" aria-modal="true" aria-labelledby="resetConfirmTitle" hidden>
+    <section class="confirm-modal">
+      <header class="confirm-modal-header">
+        <h2 class="confirm-modal-title" id="resetConfirmTitle">確認歸零</h2>
+      </header>
+      <div class="confirm-modal-body" id="resetConfirmBody">
+        確定要將儀表板累計數值歸零嗎？原始歷史紀錄仍會保留。
+      </div>
+      <footer class="confirm-modal-actions">
+        <button class="modal-button" type="button" id="resetCancelButton">取消</button>
+        <button class="modal-button primary" type="button" id="resetConfirmButton">確認歸零</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="deleteKeyConfirmModal" role="dialog" aria-modal="true" aria-labelledby="deleteKeyConfirmTitle" hidden>
+    <section class="confirm-modal">
+      <header class="confirm-modal-header">
+        <h2 class="confirm-modal-title" id="deleteKeyConfirmTitle">確認刪除 API Key</h2>
+      </header>
+      <div class="confirm-modal-body" id="deleteKeyConfirmBody">
+        確定要刪除此 API Key 嗎？刪除後無法復原。
+      </div>
+      <footer class="confirm-modal-actions">
+        <button class="modal-button" type="button" id="deleteKeyCancelButton">取消</button>
+        <button class="modal-button primary" type="button" id="deleteKeyConfirmButton">確認刪除</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="editKeyModal" role="dialog" aria-modal="true" aria-labelledby="editKeyTitle" hidden>
+    <section class="confirm-modal">
+      <header class="confirm-modal-header">
+        <h2 class="confirm-modal-title" id="editKeyTitle">修改 API Key 名稱</h2>
+      </header>
+      <div class="confirm-modal-body">
+        <label class="modal-field">
+          <span>名稱</span>
+          <input class="text-input" id="editKeyNameInput" type="text" autocomplete="off">
+        </label>
+      </div>
+      <footer class="confirm-modal-actions">
+        <button class="modal-button" type="button" id="editKeyCancelButton">取消</button>
+        <button class="modal-button primary" type="button" id="editKeyConfirmButton">儲存</button>
+      </footer>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="keyUsageStatsModal" role="dialog" aria-modal="true" aria-labelledby="keyUsageStatsTitle" hidden>
+    <section class="confirm-modal key-stats-modal">
+      <header class="confirm-modal-header">
+        <div class="key-stats-title-row">
+          <div>
+            <h2 class="confirm-modal-title" id="keyUsageStatsTitle">API Key 使用統計</h2>
+            <p class="key-stats-subtitle" id="keyUsageStatsSubtitle">每日使用次數</p>
+          </div>
+          <button class="key-action-icon" type="button" id="closeKeyUsageStatsButton" title="關閉" aria-label="關閉">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+      </header>
+      <div class="key-stats-controls">
+        <button class="key-action-icon" type="button" id="prevKeyUsageMonthButton" title="上一個月" aria-label="上一個月">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+        </button>
+        <span class="key-stats-month" id="keyUsageStatsMonth">--</span>
+        <button class="key-action-icon" type="button" id="nextKeyUsageMonthButton" title="下一個月" aria-label="下一個月">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+        </button>
+      </div>
+      <div class="key-stats-chart">
+        <canvas id="keyUsageStatsChart"></canvas>
+      </div>
+      <p class="key-stats-message" id="keyUsageStatsMessage">尚未載入統計資料。</p>
+    </section>
+  </div>
+
+  <div class="modal-backdrop" id="providerUsageStatsModal" role="dialog" aria-modal="true" aria-labelledby="providerUsageStatsTitle" hidden>
+    <section class="confirm-modal key-stats-modal">
+      <header class="confirm-modal-header">
+        <div class="key-stats-title-row">
+          <div>
+            <h2 class="confirm-modal-title" id="providerUsageStatsTitle">每日使用量統計</h2>
+            <p class="key-stats-subtitle" id="providerUsageStatsSubtitle">每日用量 = 當日 00:00 起始可使用量 - 最新可使用量</p>
+          </div>
+          <button class="key-action-icon" type="button" id="closeProviderUsageStatsButton" title="關閉" aria-label="關閉">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+      </header>
+      <div class="key-stats-controls">
+        <button class="key-action-icon" type="button" id="prevProviderUsageMonthButton" title="上一個月" aria-label="上一個月">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 18l-6-6 6-6"></path></svg>
+        </button>
+        <span class="key-stats-month" id="providerUsageStatsMonth">--</span>
+        <button class="key-action-icon" type="button" id="nextProviderUsageMonthButton" title="下一個月" aria-label="下一個月">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"></path></svg>
+        </button>
+      </div>
+      <div class="key-stats-chart">
+        <canvas id="providerUsageStatsChart"></canvas>
+      </div>
+      <p class="key-stats-message" id="providerUsageStatsMessage">尚未載入統計資料。</p>
+    </section>
+  </div>
+
+  <script>
+    const WEB_SESSION_KEY_STORAGE = "lbp.sessionApiKey";
+
+    const state = {
+      providers: [],
+      status: [],
+      metricMode: localStorage.getItem("lbp.dashboard.metricMode") || "session",
+      keyTab: localStorage.getItem("lbp.settings.keyTab") || "chat",
+      keyTypeFilter: localStorage.getItem("lbp.settings.keyTypeFilter") || "all",
+      keyPage: 1,
+      keyPageSize: 10,
+      keySort: {
+        field: localStorage.getItem("lbp.settings.keySortField") || "name",
+        direction: localStorage.getItem("lbp.settings.keySortDirection") || "asc"
+      },
+      metricBaselines: { providers: {} },
+      apiKeys: [],
+      serviceInfo: {
+        name: "LLM Proxy",
+        version: "",
+        startedAt: ""
+      },
+      general: {
+        showProviderModels: false
+      },
+      advanced: {
+        conversationAffinityTTLMinutes: 30,
+        conversationAffinityQuotaTolerancePoints: 10,
+        responseRouteMaxEntries: 2000
+      },
+      notification: {
+        url: "",
+        hasApiKey: false,
+        payload: "{\"text\":\"<msg>\"}"
+      },
+      mcp: {
+        enabled: true,
+        readOnly: false,
+        allowedOrigins: [],
+        endpoint: "/mcp/",
+        protocolVersion: "2025-11-25",
+        transport: "Streamable HTTP",
+        toolCount: 0,
+        tools: []
+      },
+      notificationCollapsed: localStorage.getItem("lbp.settings.notificationCollapsed") === "true",
+      systemUpdateFile: null,
+      systemUpdateXHR: null,
+      systemUpdateOperation: null,
+      pendingDeleteKeyID: "",
+      pendingEditKeyID: "",
+      pendingStatsKeyID: "",
+      keyUsageStatsMonth: "",
+      keyUsageStatsChart: null,
+      providerUsageStatsMonth: "",
+      providerUsageStatsChart: null,
+	      providerUsageStatsRefreshTimer: null,
+      providerListScrollLeft: 0,
+      providerFilterSignature: "",
+      providerRenderSignature: ""
+    };
+
+    let chartLibraryPromise = null;
+    let loadingOperationCount = 0;
+
+    if (!["name", "usage", "created"].includes(state.keySort.field)) {
+      state.keySort.field = "name";
+    }
+    if (!["asc", "desc"].includes(state.keySort.direction)) {
+      state.keySort.direction = "asc";
+    }
+
+    const els = {
+      providerCount: document.getElementById("providerCount"),
+      enabledCountLabel: document.getElementById("enabledCountLabel"),
+      enabledCount: document.getElementById("enabledCount"),
+      reactionTime: document.getElementById("reactionTime"),
+      avgDuration: document.getElementById("avgDuration"),
+      activeRequests: document.getElementById("activeRequests"),
+      activeRequestsLabel: document.getElementById("activeRequestsLabel"),
+      totalRemaining: document.getElementById("totalRemaining"),
+      totalRemainingCard: document.getElementById("totalRemainingCard"),
+      tokenSpeed: document.getElementById("tokenSpeed"),
+      streamOutSpeed: document.getElementById("streamOutSpeed"),
+      providerList: document.getElementById("providerList"),
+      providerScrollLeft: document.getElementById("providerScrollLeft"),
+      providerScrollRight: document.getElementById("providerScrollRight"),
+      providerUsageTooltip: document.getElementById("providerUsageTooltip"),
+      loadingModal: document.getElementById("loadingModal"),
+      loadingTitle: document.getElementById("loadingTitle"),
+      loadingMessage: document.getElementById("loadingMessage"),
+      selectSystemUpdateButton: document.getElementById("selectSystemUpdateButton"),
+      systemUpdateFileInput: document.getElementById("systemUpdateFileInput"),
+      systemUpdateModal: document.getElementById("systemUpdateModal"),
+      systemUpdateFileName: document.getElementById("systemUpdateFileName"),
+      systemUpdateFileSize: document.getElementById("systemUpdateFileSize"),
+      systemUpdateProgress: document.getElementById("systemUpdateProgress"),
+      systemUpdateProgressBar: document.getElementById("systemUpdateProgressBar"),
+      systemUpdateStatus: document.getElementById("systemUpdateStatus"),
+      systemUpdateCancelButton: document.getElementById("systemUpdateCancelButton"),
+      systemUpdateConfirmButton: document.getElementById("systemUpdateConfirmButton"),
+      providerFilter: document.getElementById("providerFilter"),
+      loadBar: document.getElementById("loadBar"),
+      loadText: document.getElementById("loadText"),
+      serviceVersion: document.getElementById("serviceVersion"),
+      resetConfirmModal: document.getElementById("resetConfirmModal"),
+      resetConfirmBody: document.getElementById("resetConfirmBody"),
+      resetCancelButton: document.getElementById("resetCancelButton"),
+      resetConfirmButton: document.getElementById("resetConfirmButton"),
+      deleteKeyConfirmModal: document.getElementById("deleteKeyConfirmModal"),
+      deleteKeyConfirmBody: document.getElementById("deleteKeyConfirmBody"),
+      deleteKeyCancelButton: document.getElementById("deleteKeyCancelButton"),
+      deleteKeyConfirmButton: document.getElementById("deleteKeyConfirmButton"),
+      editKeyModal: document.getElementById("editKeyModal"),
+      editKeyNameInput: document.getElementById("editKeyNameInput"),
+      editKeyCancelButton: document.getElementById("editKeyCancelButton"),
+      editKeyConfirmButton: document.getElementById("editKeyConfirmButton"),
+      keyUsageStatsModal: document.getElementById("keyUsageStatsModal"),
+      keyUsageStatsSubtitle: document.getElementById("keyUsageStatsSubtitle"),
+      keyUsageStatsMonth: document.getElementById("keyUsageStatsMonth"),
+      keyUsageStatsChart: document.getElementById("keyUsageStatsChart"),
+      keyUsageStatsMessage: document.getElementById("keyUsageStatsMessage"),
+      closeKeyUsageStatsButton: document.getElementById("closeKeyUsageStatsButton"),
+      prevKeyUsageMonthButton: document.getElementById("prevKeyUsageMonthButton"),
+      nextKeyUsageMonthButton: document.getElementById("nextKeyUsageMonthButton"),
+      providerUsageStatsModal: document.getElementById("providerUsageStatsModal"),
+      providerUsageStatsSubtitle: document.getElementById("providerUsageStatsSubtitle"),
+      providerUsageStatsMonth: document.getElementById("providerUsageStatsMonth"),
+      providerUsageStatsChart: document.getElementById("providerUsageStatsChart"),
+      providerUsageStatsMessage: document.getElementById("providerUsageStatsMessage"),
+      closeProviderUsageStatsButton: document.getElementById("closeProviderUsageStatsButton"),
+      prevProviderUsageMonthButton: document.getElementById("prevProviderUsageMonthButton"),
+      nextProviderUsageMonthButton: document.getElementById("nextProviderUsageMonthButton"),
+      chatKeyIssueCard: document.getElementById("chatKeyIssueCard"),
+      reloadKeysButton: document.getElementById("reloadKeysButton"),
+      newApiKeyName: document.getElementById("newApiKeyName"),
+      embeddedNewApiKeyLabel: document.getElementById("embeddedNewApiKeyLabel"),
+      embeddedCreateApiKeyLabel: document.getElementById("embeddedCreateApiKeyLabel"),
+      createApiKeyButton: document.getElementById("createApiKeyButton"),
+      generatedKeyBox: document.getElementById("generatedKeyBox"),
+      generatedKeyValue: document.getElementById("generatedKeyValue"),
+      copyGeneratedKeyButton: document.getElementById("copyGeneratedKeyButton"),
+      keyStatusMessage: document.getElementById("keyStatusMessage"),
+      apiKeyTableBody: document.getElementById("apiKeyTableBody"),
+      apiKeyUsageHeader: document.getElementById("apiKeyUsageHeader"),
+      apiKeyTypeFilter: document.getElementById("apiKeyTypeFilter"),
+      apiKeyPrevPage: document.getElementById("apiKeyPrevPage"),
+      apiKeyNextPage: document.getElementById("apiKeyNextPage"),
+      apiKeyPageStatus: document.getElementById("apiKeyPageStatus"),
+      generalStatusMessage: document.getElementById("generalStatusMessage"),
+      languageSelect: document.getElementById("languageSelect"),
+      showProviderModelsSwitch: document.getElementById("showProviderModelsSwitch"),
+      settingsVersionValue: document.getElementById("settingsVersionValue"),
+      settingsVersionName: document.getElementById("settingsVersionName"),
+      settingsVersionStartedAt: document.getElementById("settingsVersionStartedAt"),
+      mcpStatusMessage: document.getElementById("mcpStatusMessage"),
+      mcpEndpointValue: document.getElementById("mcpEndpointValue"),
+      mcpTransportValue: document.getElementById("mcpTransportValue"),
+      mcpProtocolValue: document.getElementById("mcpProtocolValue"),
+      mcpToolCountValue: document.getElementById("mcpToolCountValue"),
+      mcpEnabledSwitch: document.getElementById("mcpEnabledSwitch"),
+      mcpReadOnlySwitch: document.getElementById("mcpReadOnlySwitch"),
+      mcpAllowedOrigins: document.getElementById("mcpAllowedOrigins"),
+      mcpToolList: document.getElementById("mcpToolList"),
+      copyMcpEndpointButton: document.getElementById("copyMcpEndpointButton"),
+      reloadMcpButton: document.getElementById("reloadMcpButton"),
+      saveMcpButton: document.getElementById("saveMcpButton"),
+      advancedStatusMessage: document.getElementById("advancedStatusMessage"),
+      conversationAffinityTTLMinutes: document.getElementById("conversationAffinityTTLMinutes"),
+      conversationAffinityQuotaTolerancePoints: document.getElementById("conversationAffinityQuotaTolerancePoints"),
+      responseRouteMaxEntries: document.getElementById("responseRouteMaxEntries"),
+      providerCapacityCooldownSeconds: document.getElementById("providerCapacityCooldownSeconds"),
+      reloadAdvancedButton: document.getElementById("reloadAdvancedButton"),
+      saveAdvancedButton: document.getElementById("saveAdvancedButton"),
+      notificationStatusMessage: document.getElementById("notificationStatusMessage"),
+      notificationUrl: document.getElementById("notificationUrl"),
+      notificationApiKey: document.getElementById("notificationApiKey"),
+      notificationPayload: document.getElementById("notificationPayload"),
+      notificationTargetCard: document.getElementById("notificationTargetCard"),
+      toggleNotificationTarget: document.getElementById("toggleNotificationTarget"),
+      reloadNotificationButton: document.getElementById("reloadNotificationButton"),
+      testNotificationButton: document.getElementById("testNotificationButton"),
+      saveNotificationButton: document.getElementById("saveNotificationButton"),
+      logoutButton: document.getElementById("logoutButton")
+    };
+
+    function redirectToLogin() {
+      const target = encodeURIComponent(`${location.pathname}${location.hash || ""}`);
+      location.replace(`login.html?next=${target}`);
+    }
+
+    async function logout() {
+      try {
+        await fetch("api/logout", {
+          method: "POST",
+          headers: authHeaders(),
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+      } catch (_err) {
+      } finally {
+        sessionStorage.removeItem(WEB_SESSION_KEY_STORAGE);
+        localStorage.removeItem(WEB_SESSION_KEY_STORAGE);
+        location.replace("login.html");
+      }
+    }
+
+    function authHeaders(extraHeaders = {}) {
+      return { Accept: "application/json", ...extraHeaders };
+    }
+
+    function showLoadingDialog(message = "正在重新載入資料...", title = "正在載入") {
+      loadingOperationCount += 1;
+      els.loadingTitle.textContent = title;
+      els.loadingMessage.textContent = message;
+      els.loadingModal.hidden = false;
+      els.loadingModal.classList.add("active");
+      document.body.setAttribute("aria-busy", "true");
+    }
+
+    function updateLoadingDialog(message, title = "") {
+      if (title) {
+        els.loadingTitle.textContent = title;
+      }
+      if (message) {
+        els.loadingMessage.textContent = message;
+      }
+    }
+
+    function hideLoadingDialog() {
+      loadingOperationCount = Math.max(0, loadingOperationCount - 1);
+      if (loadingOperationCount > 0) {
+        return;
+      }
+      els.loadingModal.classList.remove("active");
+      els.loadingModal.hidden = true;
+      document.body.removeAttribute("aria-busy");
+    }
+
+    function waitForLoadingPaint() {
+      return new Promise(resolve => {
+        requestAnimationFrame(() => requestAnimationFrame(resolve));
+      });
+    }
+
+    async function withLoadingDialog(task, message = "正在重新載入資料...", title = "正在載入") {
+      showLoadingDialog(message, title);
+      try {
+        await waitForLoadingPaint();
+        return await task();
+      } finally {
+        hideLoadingDialog();
+      }
+    }
+
+    async function checkSession() {
+      try {
+        const response = await fetch("api/session", {
+          headers: authHeaders(),
+          credentials: "same-origin",
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          redirectToLogin();
+          return false;
+        }
+        return true;
+      } catch (_err) {
+        redirectToLogin();
+        return false;
+      }
+    }
+
+    async function apiRequest(url, options = {}) {
+      const headers = authHeaders(options.headers || {});
+      const response = await fetch(url, {
+        ...options,
+        headers,
+        credentials: "same-origin",
+        cache: "no-store"
+      });
+      const text = await response.text();
+      let payload = {};
+      if (text) {
+        try {
+          payload = JSON.parse(text);
+        } catch (_err) {
+          payload = { message: text };
+        }
+      }
+      if (!response.ok) {
+        if (response.status === 401) {
+          redirectToLogin();
+        }
+        throw new Error(payload?.error?.message || payload?.detail || payload?.message || `API request failed: ${response.status}`);
+      }
+      return payload;
+    }
+
+    async function loadData() {
+      try {
+        const [configs, health, baselines] = await Promise.all([
+          apiRequest("api/provider-configs"),
+          apiRequest("api/health"),
+          apiRequest("api/dashboard-metric-baselines")
+        ]);
+        state.providers = configs.providers || [];
+        state.status = health.providers || [];
+        state.metricBaselines = normalizeMetricBaselines(baselines);
+      } catch (_err) {
+        state.providers = [];
+        state.status = [];
+        state.metricBaselines = { providers: {} };
+      }
+      render();
+    }
+
+    async function loadVersion() {
+      try {
+        const payload = await apiRequest("api/version");
+        state.serviceInfo = {
+          name: payload.name || "LLM Proxy",
+          version: payload.version || "",
+          startedAt: payload.started_at || ""
+        };
+        renderVersionInfo();
+      } catch (_err) {
+        state.serviceInfo = { name: "LLM Proxy", version: "", startedAt: "" };
+        renderVersionInfo();
+      }
+    }
+
+    function renderVersionInfo() {
+      const info = state.serviceInfo || {};
+      const version = info.version || "";
+      if (els.serviceVersion) {
+        els.serviceVersion.textContent = version;
+      }
+      if (els.settingsVersionValue) {
+        els.settingsVersionValue.textContent = version || "尚未載入";
+      }
+      if (els.settingsVersionName) {
+        els.settingsVersionName.textContent = info.name || "LLM Proxy";
+      }
+      if (els.settingsVersionStartedAt) {
+        els.settingsVersionStartedAt.textContent = formatDateTime(info.startedAt) || "-";
+      }
+    }
+
+    function formatUpdateFileSize(bytes) {
+      const size = Math.max(0, Number(bytes || 0));
+      if (size >= 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+      if (size >= 1024) return `${(size / 1024).toFixed(1)} KB`;
+      return `${size} B`;
+    }
+
+    function openSystemUpdateModal(file) {
+      state.systemUpdateFile = file;
+      state.systemUpdateOperation = null;
+      els.systemUpdateFileName.textContent = file.name;
+      els.systemUpdateFileSize.textContent = formatUpdateFileSize(file.size);
+      els.systemUpdateProgress.hidden = true;
+      els.systemUpdateProgressBar.style.width = "0%";
+      els.systemUpdateStatus.textContent = "";
+      els.systemUpdateConfirmButton.disabled = false;
+      els.systemUpdateCancelButton.disabled = false;
+      els.systemUpdateCancelButton.textContent = "取消";
+      els.systemUpdateModal.hidden = false;
+      els.systemUpdateModal.classList.add("active");
+      els.systemUpdateConfirmButton.focus();
+    }
+
+    function closeSystemUpdateModal() {
+      if (state.systemUpdateXHR) {
+        state.systemUpdateXHR.abort();
+        state.systemUpdateXHR = null;
+      }
+      state.systemUpdateFile = null;
+      state.systemUpdateOperation = null;
+      els.systemUpdateModal.classList.remove("active");
+      els.systemUpdateModal.hidden = true;
+      els.systemUpdateFileInput.value = "";
+      els.selectSystemUpdateButton.focus();
+    }
+
+    async function uploadSystemUpdate() {
+      const file = state.systemUpdateFile;
+      if (!file || state.systemUpdateXHR) return;
+
+      const controller = new AbortController();
+      state.systemUpdateXHR = controller;
+      els.systemUpdateProgress.hidden = false;
+      els.systemUpdateProgressBar.style.width = "0%";
+      els.systemUpdateStatus.textContent = "正在建立切片上傳工作...";
+      els.systemUpdateConfirmButton.disabled = true;
+      els.systemUpdateCancelButton.textContent = "取消上傳";
+
+      try {
+        const sessionPayload = await apiRequest("api/system/update/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_name: file.name, total_size: file.size }),
+          signal: controller.signal
+        });
+        const sessionID = sessionPayload?.session?.session_id || "";
+        const chunkSize = Math.max(64 * 1024, Number(sessionPayload?.chunk_size || 2 * 1024 * 1024));
+        if (!sessionID) throw new Error("後端未回傳更新切片工作識別碼");
+
+        let offset = Number(sessionPayload?.session?.received_size || 0);
+        let index = Number(sessionPayload?.session?.next_index || 0);
+        while (offset < file.size) {
+          const end = Math.min(file.size, offset + chunkSize);
+          const chunk = await file.slice(offset, end).arrayBuffer();
+          const chunkPayload = await apiRequest(
+            `api/system/update/chunk?session_id=${encodeURIComponent(sessionID)}&index=${index}&offset=${offset}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: chunk,
+              signal: controller.signal
+            }
+          );
+          offset = Number(chunkPayload?.session?.received_size || end);
+          index = Number(chunkPayload?.session?.next_index || (index + 1));
+          const percent = Math.min(95, Math.round((offset / file.size) * 95));
+          els.systemUpdateProgressBar.style.width = `${percent}%`;
+          els.systemUpdateStatus.textContent = `正在上傳更新檔案... ${percent}%`;
+        }
+
+        els.systemUpdateStatus.textContent = "上傳完成，正在驗證並排程更新...";
+        const responsePayload = await apiRequest("api/system/update/commit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionID, file_name: file.name }),
+          signal: controller.signal
+        });
+        state.systemUpdateXHR = null;
+        state.systemUpdateOperation = responsePayload.update || null;
+        if (!state.systemUpdateOperation?.operation_id) {
+          els.systemUpdateStatus.textContent = "更新已接收，但缺少操作識別碼，無法驗證更新結果。";
+          els.systemUpdateCancelButton.textContent = "關閉";
+          els.systemUpdateCancelButton.disabled = false;
+          return;
+        }
+        els.systemUpdateProgressBar.style.width = "100%";
+        els.systemUpdateStatus.textContent = "更新已排程，正在等待服務重新啟動...";
+        els.systemUpdateCancelButton.textContent = "更新中";
+        els.systemUpdateCancelButton.disabled = true;
+        waitForSystemRestart(state.serviceInfo.startedAt || "", state.systemUpdateOperation);
+      } catch (error) {
+        if (state.systemUpdateXHR === controller) state.systemUpdateXHR = null;
+        if (error?.name === "AbortError") return;
+        els.systemUpdateStatus.textContent = error?.message || "更新上傳失敗，服務尚未進入更新程序。";
+        els.systemUpdateConfirmButton.disabled = false;
+        els.systemUpdateCancelButton.textContent = "取消";
+      }
+    }
+
+    async function waitForSystemRestart(previousStartedAt, operation) {
+      let observedOffline = false;
+      for (let attempt = 0; attempt < 80; attempt += 1) {
+        await new Promise(resolve => window.setTimeout(resolve, 1500));
+        try {
+          const response = await fetch(`api/version?_=${Date.now()}`, {
+            headers: authHeaders(),
+            credentials: "same-origin",
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            observedOffline = true;
+            continue;
+          }
+          const payload = await response.json();
+          const restarted = observedOffline || (payload.started_at && payload.started_at !== previousStartedAt);
+          let updateStatus = null;
+          try {
+            const statusPayload = await apiRequest(`api/system/update/status?_=${Date.now()}`);
+            updateStatus = statusPayload.update || null;
+          } catch (_err) {
+          }
+          if (updateStatus?.operation_id && updateStatus.operation_id !== operation.operation_id) {
+            els.systemUpdateStatus.textContent = "偵測到另一筆更新操作，請查看更新紀錄。";
+            els.systemUpdateCancelButton.textContent = "關閉";
+            els.systemUpdateCancelButton.disabled = false;
+            return;
+          }
+          if (updateStatus?.state === "failed") {
+            els.systemUpdateStatus.textContent = "更新套用失敗，系統已嘗試回滾；請查看 service_update.log。";
+            els.systemUpdateCancelButton.textContent = "關閉";
+            els.systemUpdateCancelButton.disabled = false;
+            return;
+          }
+          if (restarted && updateStatus?.state === "completed") {
+            if (!updateStatus.main_applied) {
+              els.systemUpdateStatus.textContent = "服務已重啟，但 website/main.html 與更新包不一致；請查看 service_update.log。";
+              els.systemUpdateCancelButton.textContent = "關閉";
+              els.systemUpdateCancelButton.disabled = false;
+              return;
+            }
+            els.systemUpdateStatus.textContent = `服務已更新為 ${operation.version || payload.version || "新版本"}，正在重新載入...`;
+            window.setTimeout(() => {
+              const reloadURL = new URL(window.location.href);
+              reloadURL.searchParams.set("updated", operation.operation_id);
+              window.location.replace(reloadURL.toString());
+            }, 500);
+            return;
+          }
+        } catch (_err) {
+          observedOffline = true;
+        }
+      }
+      els.systemUpdateStatus.textContent = "等待服務重啟逾時，請稍後手動重新整理頁面，並查看 data/system/service_update/service_update.log。";
+      els.systemUpdateCancelButton.textContent = "關閉";
+      els.systemUpdateCancelButton.disabled = false;
+    }
+
+    function render() {
+      const providerMap = new Map(state.providers.map(provider => [provider.id, provider]));
+      const selected = els.providerFilter.value;
+      const filteredStatus = selected ? state.status.filter(item => item.id === selected) : state.status;
+      const cumulativeMode = state.metricMode === "cumulative";
+      const total = state.providers.length;
+      const enabled = state.providers.filter(provider => provider.enabled).length;
+      const active = filteredStatus.reduce((sum, item) => sum + Number(item.active_requests || item.active || 0), 0);
+      const cumulativeRequests = filteredStatus.reduce((sum, item) => sum + cumulativeRequestCount(item), 0);
+      const cumulativeResponseTokens = filteredStatus.reduce((sum, item) => sum + cumulativeCompletionTokens(item), 0);
+      const enabledProviderIDs = new Set(state.providers.filter(provider => provider.enabled).map(provider => provider.id));
+      const enabledRemainingValues = state.status
+        .filter(item => enabledProviderIDs.has(item.id))
+        .map(minimumProviderRemainingPercent)
+        .filter(value => value !== null);
+      const totalRemaining = enabled > 0 && enabledRemainingValues.length
+        ? enabledRemainingValues.reduce((sum, value) => sum + value, 0) / enabled
+        : null;
+      const timingSamples = filteredStatus.map(item => ({
+        reaction: displayReactionTime(item),
+        processing: displayProcessingTime(item)
+      }));
+      const reactionSamples = timingSamples.map(sample => sample.reaction).filter(value => value > 0);
+      const processingSamples = timingSamples
+        .map(sample => Math.max(sample.processing, sample.reaction))
+        .filter(value => value > 0);
+      const avgReaction = reactionSamples.length ? reactionSamples.reduce((sum, value) => sum + value, 0) / reactionSamples.length : 0;
+      const rawAvgLatency = processingSamples.length ? processingSamples.reduce((sum, value) => sum + value, 0) / processingSamples.length : 0;
+      const avgLatency = Math.max(rawAvgLatency, avgReaction);
+      const tokenSpeedValues = filteredStatus.map(tokenGenerationSpeed).filter(value => value > 0);
+      const avgTokenSpeed = tokenSpeedValues.length ? tokenSpeedValues.reduce((sum, value) => sum + value, 0) / tokenSpeedValues.length : 0;
+      const streamOutSpeedValues = filteredStatus.map(streamOutSpeed).filter(value => value > 0);
+      const avgStreamOutSpeed = streamOutSpeedValues.length ? streamOutSpeedValues.reduce((sum, value) => sum + value, 0) / streamOutSpeedValues.length : 0;
+      const capacity = filteredStatus.reduce((sum, item) => sum + Number(item.max_concurrent || 0), 0);
+      const loadPercent = capacity > 0 ? Math.min(100, (active / capacity) * 100) : 0;
+
+      els.providerCount.textContent = String(total);
+      els.enabledCountLabel.textContent = cumulativeMode ? "累積回應 Token 數" : "啟用 Provider";
+      els.enabledCount.textContent = cumulativeMode ? formatCumulativeCount(cumulativeResponseTokens) : String(enabled);
+      els.reactionTime.textContent = formatDuration(avgReaction);
+      els.avgDuration.textContent = formatDuration(avgLatency);
+      els.activeRequestsLabel.textContent = cumulativeMode ? "累積請求" : "目前活躍請求";
+      els.activeRequests.textContent = cumulativeMode ? formatCumulativeCount(cumulativeRequests) : String(active);
+      // null 代表沒有任何啟用中的 provider 回報配額上限，等同不受限制。
+      // 顯示 ∞ 符號，並同步維護 title，避免切回百分比後殘留「無限制」的提示。
+      const unlimitedQuota = totalRemaining === null;
+      els.totalRemaining.textContent = unlimitedQuota ? "∞" : percentText(totalRemaining);
+      els.totalRemaining.title = unlimitedQuota ? "無限制" : "";
+      els.tokenSpeed.textContent = `${formatSpeed(avgTokenSpeed)} tok/s`;
+      els.streamOutSpeed.textContent = `${formatSpeed(avgStreamOutSpeed)} tok/s`;
+      els.loadBar.style.width = `${loadPercent}%`;
+      els.loadText.textContent = `${active} / ${capacity}`;
+
+      syncMetricSegments();
+      syncProviderFilter();
+      renderProviders(filteredStatus, providerMap);
+    }
+
+    function tokenGenerationSpeed(item) {
+      if (isProviderReset(item)) {
+        return 0;
+      }
+      const candidates = [
+        item.provider_generation_tps,
+        item.token_generation_speed,
+        item.generation_tokens_per_second,
+        item.last_token_generation_speed,
+        item.token_generation_speed_tps,
+        item.tokens_per_second,
+        item.generation_tps
+      ];
+      for (const value of candidates) {
+        const speed = Number(value || 0);
+        if (speed > 0) return speed;
+      }
+      return 0;
+    }
+
+    function streamOutSpeed(item) {
+      if (isProviderReset(item)) {
+        return 0;
+      }
+      const candidates = [
+        item.client_delivery_tps,
+        item.last_client_delivery_tps,
+        item.stream_out_tps,
+        item.streaming_out_tps
+      ];
+      for (const value of candidates) {
+        const speed = Number(value || 0);
+        if (speed > 0) return speed;
+      }
+      return 0;
+    }
+
+    function displayReactionTime(item) {
+      if (isProviderReset(item)) {
+        return 0;
+      }
+      const candidates = [
+        item.reaction_time_ms,
+        item.last_reaction_time_ms,
+        item.first_token_ms
+      ];
+      for (const value of candidates) {
+        const reactionMS = Number(value || 0);
+        if (reactionMS <= 0) {
+          continue;
+        }
+        return reactionMS;
+      }
+      return 0;
+    }
+
+    function displayProcessingTime(item) {
+      if (isProviderReset(item)) {
+        return 0;
+      }
+      return Number(item.latency_p50_ms || item.processing_time_ms || item.last_duration_ms || item.latency_p95_ms || 0);
+    }
+
+    function rawProcessingTime(item) {
+      return Number(item.latency_p50_ms || item.processing_time_ms || item.last_duration_ms || item.latency_p95_ms || 0);
+    }
+
+    function formatSpeed(value) {
+      if (value >= 100) return Math.round(value).toLocaleString(window.LBPI18n?.locale() || "zh-TW");
+      if (value >= 10) return value.toFixed(1);
+      if (value > 0) return value.toFixed(2);
+      return "0";
+    }
+
+    function formatInteger(value) {
+      return Math.round(Number(value || 0)).toLocaleString(window.LBPI18n?.locale() || "zh-TW");
+    }
+
+    function formatCumulativeCount(value) {
+      const count = Number(value || 0);
+      if (Math.abs(count) >= 100000000) {
+        return `${(count / 100000000).toFixed(2)}億`;
+      }
+      if (Math.abs(count) >= 10000) {
+        return `${(count / 10000).toFixed(1)}萬`;
+      }
+      return Math.round(count).toLocaleString(window.LBPI18n?.locale() || "zh-TW");
+    }
+
+    function syncProviderFilter() {
+      const signature = JSON.stringify(state.providers.map(provider => [provider.id, provider.name]));
+      if (signature === state.providerFilterSignature) {
+        return;
+      }
+      state.providerFilterSignature = signature;
+      const previous = els.providerFilter.value;
+      els.providerFilter.innerHTML = `<option value="">所有模型</option>`;
+      state.providers.forEach(provider => {
+        const option = document.createElement("option");
+        option.value = provider.id;
+        option.textContent = provider.name || provider.id;
+        els.providerFilter.appendChild(option);
+      });
+      els.providerFilter.value = previous;
+    }
+
+    function syncMetricSegments() {
+      document.querySelectorAll("[data-metric-mode]").forEach(button => {
+        button.classList.toggle("active", button.dataset.metricMode === state.metricMode);
+      });
+    }
+
+    function renderProviders(statusItems, providerMap) {
+      const signature = JSON.stringify({
+        mode: state.metricMode,
+        items: statusItems,
+        providers: statusItems.map(item => providerMap.get(item.id) || null),
+        baselines: state.metricBaselines
+      });
+      if (signature === state.providerRenderSignature) {
+        updateProviderScrollButtons();
+        return;
+      }
+      state.providerRenderSignature = signature;
+      if (!statusItems.length) {
+        els.providerList.innerHTML = `<div class="empty">尚未載入模型</div>`;
+        updateProviderScrollButtons();
+        return;
+      }
+
+      const previousScroll = Number(state.providerListScrollLeft || els.providerList.scrollLeft || 0);
+      els.providerList.innerHTML = "";
+      statusItems.forEach(item => {
+        const provider = providerMap.get(item.id) || {};
+        const model = Array.isArray(item.models) && item.models[0] ? item.models[0].name : provider.model || "未指定模型";
+        const durationMS = displayProcessingTime(item);
+        const tokenSpeed = tokenGenerationSpeed(item);
+        const requestCount = state.metricMode === "cumulative" ? cumulativeRequestCount(item) : sessionRequestCount(item);
+        const activeCount = Number(item.active_requests || item.active || 0);
+        const maxConcurrent = Number(item.max_concurrent || 0);
+        const requestLabel = state.metricMode === "cumulative" ? "累積請求" : "請求數";
+        // 綁定數＝目前被對話黏著釘在這個 Provider 的對話數（prompt_cache_key 對應）。
+        const boundCount = Number(item.bound_conversations || 0);
+        const cell = document.createElement("article");
+        cell.className = "provider-cell";
+        cell.innerHTML = `
+          <div class="provider-name">
+            <span class="status-dot ${providerStatusDotClass(item)}"></span>
+            <span>${escapeHtml(item.name || provider.name || item.id)}</span>
+          </div>
+          <div class="provider-meta">${escapeHtml(model)}</div>
+          <div class="provider-meta">${requestLabel} ${requestCount.toLocaleString(window.LBPI18n?.locale() || "zh-TW")} · 綁定數 ${boundCount} · 活躍數 ${activeCount} / ${maxConcurrent}</div>
+          <div class="provider-meta">${formatDuration(durationMS)} · ${formatSpeed(tokenSpeed)} tok/s</div>
+        `;
+        cell.addEventListener("mouseenter", event => showProviderUsageTooltip(event, item, provider));
+        cell.addEventListener("mousemove", moveProviderUsageTooltip);
+        cell.addEventListener("mouseleave", hideProviderUsageTooltip);
+        els.providerList.appendChild(cell);
+      });
+      requestAnimationFrame(() => {
+        const maxScroll = providerListMaxScroll();
+        els.providerList.scrollLeft = Math.min(previousScroll, maxScroll);
+        state.providerListScrollLeft = els.providerList.scrollLeft;
+        updateProviderScrollButtons();
+      });
+    }
+
+    function providerListMaxScroll() {
+      if (!els.providerList) return 0;
+      return Math.max(0, els.providerList.scrollWidth - els.providerList.clientWidth);
+    }
+
+    function updateProviderScrollButtons() {
+      if (!els.providerList || !els.providerScrollLeft || !els.providerScrollRight) return;
+      const maxScroll = providerListMaxScroll();
+      const scrollLeft = Number(els.providerList.scrollLeft || 0);
+      const hasOverflow = maxScroll > 1;
+      els.providerScrollLeft.disabled = !hasOverflow || scrollLeft <= 1;
+      els.providerScrollRight.disabled = !hasOverflow || scrollLeft >= maxScroll - 1;
+    }
+
+    function scrollProviderList(direction) {
+      if (!els.providerList) return;
+      const firstCell = els.providerList.querySelector(".provider-cell");
+      const step = firstCell ? firstCell.getBoundingClientRect().width : Math.max(240, els.providerList.clientWidth / 2);
+      els.providerList.scrollBy({ left: direction * step, behavior: "smooth" });
+      window.setTimeout(updateProviderScrollButtons, 260);
+    }
+
+    function showProviderUsageTooltip(event, item, provider) {
+      if (!els.providerUsageTooltip) return;
+      els.providerUsageTooltip.innerHTML = buildProviderUsageTooltip(item, provider);
+      els.providerUsageTooltip.hidden = false;
+      moveProviderUsageTooltip(event);
+    }
+
+    function moveProviderUsageTooltip(event) {
+      if (!els.providerUsageTooltip || els.providerUsageTooltip.hidden) return;
+      const gap = 14;
+      const rect = els.providerUsageTooltip.getBoundingClientRect();
+      let left = event.clientX + gap;
+      let top = event.clientY + gap;
+      if (left + rect.width > window.innerWidth - 12) {
+        left = event.clientX - rect.width - gap;
+      }
+      if (top + rect.height > window.innerHeight - 12) {
+        top = event.clientY - rect.height - gap;
+      }
+      els.providerUsageTooltip.style.left = `${Math.max(12, left)}px`;
+      els.providerUsageTooltip.style.top = `${Math.max(12, top)}px`;
+    }
+
+    function hideProviderUsageTooltip() {
+      if (els.providerUsageTooltip) {
+        els.providerUsageTooltip.hidden = true;
+      }
+    }
+
+    function buildProviderUsageTooltip(item, provider) {
+      const usage = item.usage && typeof item.usage === "object" ? item.usage : {};
+      const rows = [];
+      buildRemainingUsageRows(rows, item, usage);
+      const body = rows.length
+        ? rows.map(row => `
+            <div class="usage-tooltip-row">
+              <span class="usage-tooltip-label">${escapeHtml(row.label)}</span>
+              <span class="usage-tooltip-value">${escapeHtml(row.value)}</span>
+            </div>
+          `).join("")
+        : `<div class="usage-tooltip-row"><span class="usage-tooltip-label">狀態</span><span class="usage-tooltip-value">無相關資訊</span></div>`;
+      return `
+        <div class="usage-tooltip-title">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a8 8 0 0 1 16 0"></path><path d="M12 14l4-4"></path><path d="M5 19h14"></path></svg>
+          <span>剩餘用量</span>
+        </div>
+        ${body}
+      `;
+    }
+
+    function buildRemainingUsageRows(rows, item, usage) {
+      const headers = usage.headers && typeof usage.headers === "object" ? usage.headers : {};
+      const hasUsage = providerHasUsageInfo(item, usage);
+      if (item.auth_error) {
+        rows.push({ label: "狀態", value: "登入 TOKEN 已失效" });
+        if (item.auth_error_message) {
+          rows.push({ label: "錯誤", value: item.auth_error_message });
+        }
+      }
+      const account = firstText(
+        item.oauthAccount,
+        item.oauth_account,
+        item.account,
+        item.account_email,
+        item.account_name,
+        headers["x-codex-account"],
+        headers["x-codex-account-email"],
+        headers["x-codex-user"],
+        headers["x-codex-user-email"]
+      );
+      if (account) {
+        rows.push({ label: "帳號", value: account });
+      }
+      if (!hasUsage) {
+        rows.push({ label: "7日", value: "無" });
+        rows.push({ label: "更新時間", value: "無" });
+        return;
+      }
+
+      let usageRowCount = 0;
+      if (addCodexRemainingRow(rows, usage, headers, "primary", "五小時")) usageRowCount++;
+      if (addCodexRemainingRow(rows, usage, headers, "secondary", "7日")) usageRowCount++;
+
+      const requestRemaining = usageRemainingText(
+        usage.remaining_requests,
+        usage.limit_requests,
+        firstDefined(usage.request_remaining_percent)
+      );
+      if (addUsageRow(rows, "請求", requestRemaining)) usageRowCount++;
+
+      const tokenRemaining = usageRemainingText(
+        usage.remaining_tokens,
+        usage.limit_tokens,
+        firstDefined(usage.token_remaining_percent)
+      );
+      if (addUsageRow(rows, "Token", tokenRemaining)) usageRowCount++;
+
+      const overallRemaining = hasUsage ? percentText(firstDefined(
+        item.remaining_percent,
+        usage.request_remaining_percent,
+        usage.token_remaining_percent,
+        usage.codex_primary_remaining_percent,
+        usage.codex_secondary_remaining_percent
+      )) : "";
+      if (usageRowCount === 0) {
+        addUsageRow(rows, "7日", overallRemaining ? `剩餘 ${overallRemaining}` : "無");
+      }
+
+      addUsageRow(rows, "請求重置", formatUsageReset(usage.reset_requests));
+      addUsageRow(rows, "Token 重置", formatUsageReset(usage.reset_tokens));
+      addUsageRow(rows, "方案", firstText(headers["x-codex-plan-type"]));
+      addUsageRow(rows, "限制", firstText(headers["x-codex-active-limit"]));
+      rows.push({ label: "更新時間", value: formatUsageTime(usage.updated_at) || "無" });
+    }
+
+    function addCodexRemainingRow(rows, usage, headers, prefix, fallbackLabel) {
+      const windowMinutes = usageNumber(headers[`x-codex-${prefix}-window-minutes`]);
+      const label = formatCodexWindow(windowMinutes, fallbackLabel);
+      const used = firstUsageNumber(
+        headers[`x-codex-${prefix}-used-percent`],
+        usage[`codex_${prefix}_used_percent`]
+      );
+      const remainingValue = firstUsageNumber(
+        usage[`codex_${prefix}_remaining_percent`],
+        used === null ? null : 100 - used
+      );
+      if (remainingValue === null) return false;
+      const remaining = percentText(remainingValue);
+      const resetAtSeconds = usageNumber(headers[`x-codex-${prefix}-reset-at`]);
+      const resetAfterSeconds = usageNumber(headers[`x-codex-${prefix}-reset-after-seconds`]);
+      const resetText = resetAfterSeconds !== null
+        ? formatResetAfter(resetAfterSeconds)
+        : (resetAtSeconds !== null ? formatResetAfter(resetAtSeconds - Math.floor(Date.now() / 1000)) : "");
+      const parts = [`剩餘 ${remaining}`];
+      if (resetText) parts.push(`${resetText}重置`);
+      addUsageRow(rows, label, parts.join("，"));
+      return true;
+    }
+
+    function hasCodexRemaining(usage, headers) {
+      return hasUsageHeaderNumber(headers, "x-codex-primary-used-percent") ||
+        hasUsageHeaderNumber(headers, "x-codex-secondary-used-percent") ||
+        Number(usage.codex_primary_used_percent) > 0 ||
+        Number(usage.codex_primary_remaining_percent) > 0 ||
+        Number(usage.codex_secondary_used_percent) > 0 ||
+        Number(usage.codex_secondary_remaining_percent) > 0;
+    }
+
+    function usageRemainingText(remaining, limit, remainingPercent) {
+      const remainingText = firstText(remaining);
+      const limitText = firstText(limit);
+      const percent = percentText(remainingPercent);
+      if (remainingText && limitText && percent) return `剩餘 ${remainingText} / ${limitText}（${percent}）`;
+      if (remainingText && limitText) return `剩餘 ${remainingText} / ${limitText}`;
+      if (remainingText) return `剩餘 ${remainingText}`;
+      if (percent) return `剩餘 ${percent}`;
+      return "";
+    }
+
+    function usageNumber(value) {
+      const text = String(value ?? "").trim();
+      if (!text) return null;
+      const number = Number(text);
+      return Number.isFinite(number) ? number : null;
+    }
+
+    function firstUsageNumber(...values) {
+      for (const value of values) {
+        const number = usageNumber(value);
+        if (number !== null) return number;
+      }
+      return null;
+    }
+
+    function formatCodexWindow(minutes, fallback) {
+      const value = Number(minutes || 0);
+      if (value === 300) return "五小時";
+      if (value === 10080) return "7日";
+      if (value > 0 && value % 1440 === 0) return `${value / 1440}日`;
+      if (value > 0 && value % 60 === 0) return `${value / 60}小時`;
+      return fallback;
+    }
+
+    function formatResetAfter(seconds) {
+      const value = Number(seconds);
+      if (!Number.isFinite(value)) return "";
+      const totalMinutes = Math.max(0, Math.ceil(value / 60));
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      return `${days}天${hours}小時${minutes}分鐘後`;
+    }
+
+    function formatUsageReset(value) {
+      const text = firstText(value);
+      if (!text) return "";
+      const seconds = usageNumber(text);
+      if (seconds !== null) return `${formatResetAfter(seconds)}重置`;
+      return text;
+    }
+
+    function addUsageRow(rows, label, value) {
+      const text = value === undefined || value === null ? "" : String(value).trim();
+      if (!text) return false;
+      rows.push({ label, value: text });
+      return true;
+    }
+
+    function firstDefined(...values) {
+      return values.find(value => value !== undefined && value !== null && Number.isFinite(Number(value)));
+    }
+
+    function providerStatusDotClass(item) {
+      if (!item.enabled) return "off";
+      if (item.auth_error) return "auth";
+      const remaining = minimumProviderRemainingPercent(item);
+      if (remaining === null) return "";
+      if (remaining <= 5) return "danger";
+      if (remaining < 30) return "warning";
+      return "";
+    }
+
+    function minimumProviderRemainingPercent(item) {
+      const usage = item.usage && typeof item.usage === "object" ? item.usage : {};
+      const headers = usage.headers && typeof usage.headers === "object" ? usage.headers : {};
+      const values = [];
+      addKnownCodexRemainingPercent(values, usage, headers, "primary");
+      addKnownCodexRemainingPercent(values, usage, headers, "secondary");
+      addLimitRemainingPercent(values, usage.limit_requests, usage.remaining_requests);
+      addLimitRemainingPercent(values, usage.limit_tokens, usage.remaining_tokens);
+      return values.length ? Math.min(...values) : null;
+    }
+
+    function addUsagePercent(values, value) {
+      const number = usageNumber(value);
+      if (number === null) return;
+      values.push(Math.max(0, Math.min(100, number)));
+    }
+
+    function addRemainingFromUsedPercent(values, value) {
+      const number = usageNumber(value);
+      if (number === null) return;
+      values.push(Math.max(0, Math.min(100, 100 - number)));
+    }
+
+    function addKnownCodexRemainingPercent(values, usage, headers, prefix) {
+      const remainingHeader = headers[`x-codex-${prefix}-remaining-percent`];
+      const usedHeader = headers[`x-codex-${prefix}-used-percent`];
+      if (usageNumber(remainingHeader) !== null) {
+        addUsagePercent(values, remainingHeader);
+        return;
+      }
+      if (usageNumber(usedHeader) !== null) {
+        addRemainingFromUsedPercent(values, usedHeader);
+        return;
+      }
+
+      const remaining = usage[`codex_${prefix}_remaining_percent`];
+      const used = usage[`codex_${prefix}_used_percent`];
+      const remainingNumber = usageNumber(remaining);
+      const usedNumber = usageNumber(used);
+      if (remainingNumber !== null && usedNumber !== null && (remainingNumber > 0 || usedNumber > 0)) {
+        addUsagePercent(values, remaining);
+      }
+    }
+
+    function addLimitRemainingPercent(values, limit, remaining) {
+      const limitNumber = usageNumber(limit);
+      const remainingNumber = usageNumber(remaining);
+      if (limitNumber === null || remainingNumber === null || limitNumber <= 0) return;
+      values.push(Math.max(0, Math.min(100, (remainingNumber / limitNumber) * 100)));
+    }
+
+    function percentText(value) {
+      if (value === undefined || value === null || !Number.isFinite(Number(value))) return "";
+      const number = Math.max(0, Math.min(100, Number(value)));
+      return `${Number.isInteger(number) ? number.toFixed(0) : number.toFixed(1)}%`;
+    }
+
+    function firstText(...values) {
+      for (const value of values) {
+        const text = value === undefined || value === null ? "" : String(value).trim();
+        if (text) return text;
+      }
+      return "";
+    }
+
+    function providerHasUsageInfo(item, usage) {
+      const headers = usage.headers && typeof usage.headers === "object" ? usage.headers : {};
+      if (hasCodexRemaining(usage, headers)) return true;
+      const usageKeys = [
+        "limit_requests",
+        "remaining_requests",
+        "limit_tokens",
+        "remaining_tokens"
+      ];
+      if (usageKeys.some(key => usage[key] !== undefined && usage[key] !== null && String(usage[key]).trim() !== "")) return true;
+      return [
+        item.usage_percent,
+        item.remaining_percent,
+        usage.request_usage_percent,
+        usage.request_remaining_percent,
+        usage.token_usage_percent,
+        usage.token_remaining_percent,
+        usage.codex_primary_used_percent,
+        usage.codex_primary_remaining_percent,
+        usage.codex_secondary_used_percent,
+        usage.codex_secondary_remaining_percent
+      ].some(value => Number(value) > 0);
+    }
+
+    function formatUsageTime(value) {
+      if (!value) return "";
+      const raw = String(value).trim();
+      if (!raw || raw.startsWith("0001-01-01")) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      if (date.getFullYear() <= 1971) return "";
+      return date.toLocaleString(window.LBPI18n?.locale() || "zh-TW", { hour12: false });
+    }
+
+    function hasUsageHeaderNumber(headers, key) {
+      return Object.prototype.hasOwnProperty.call(headers, key) && usageNumber(headers[key]) !== null;
+    }
+
+    function formatDuration(value) {
+      const duration = Number(value || 0);
+      const totalSeconds = Math.max(0, Math.round(duration / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, "0")} 分 ${String(seconds).padStart(2, "0")} 秒`;
+    }
+
+    function sessionRequestCount(item) {
+      const rawCount = rawSessionRequestCount(item);
+      const baseline = providerMetricBaseline(item).sessionRequests;
+      return Math.max(0, rawCount - baseline);
+    }
+
+    function rawSessionRequestCount(item) {
+      return Number(item.successes || 0) + Number(item.failures || 0);
+    }
+
+    function cumulativeRequestCount(item) {
+      const rawCount = rawCumulativeRequestCount(item);
+      const baseline = providerMetricBaseline(item).requests;
+      return Math.max(0, rawCount - baseline);
+    }
+
+    function rawCumulativeRequestCount(item) {
+      const direct = Number(item.total_requests || item.selected_count || item.request_count || 0);
+      if (direct > 0) {
+        return direct;
+      }
+      const cumulative = Number(item.cumulative_successes || 0) + Number(item.cumulative_failures || 0);
+      if (cumulative > 0) {
+        return cumulative;
+      }
+      return rawSessionRequestCount(item);
+    }
+
+    function cumulativeCompletionTokens(item) {
+      const rawCount = rawCumulativeCompletionTokens(item);
+      const baseline = providerMetricBaseline(item).completionTokens;
+      return Math.max(0, rawCount - baseline);
+    }
+
+    function rawCumulativeCompletionTokens(item) {
+      const candidates = [
+        item.total_completion_tokens,
+        item.cumulative_completion_tokens,
+        item.completion_tokens_total,
+        item.output_tokens_total,
+        item.total_output_tokens
+      ];
+      for (const value of candidates) {
+        const number = Number(value || 0);
+        if (number > 0) {
+          return number;
+        }
+      }
+      return 0;
+    }
+
+    function isProviderReset(item) {
+      return rawCumulativeRequestCount(item) <= providerMetricBaseline(item).requests;
+    }
+
+    function providerMetricBaseline(item) {
+      const providerID = String(item?.id || "");
+      const providerBaseline = state.metricBaselines.providers?.[providerID] || {};
+      return {
+        requests: Number(providerBaseline.requests || 0),
+        sessionRequests: Number(providerBaseline.sessionRequests || 0),
+        completionTokens: Number(providerBaseline.completionTokens || 0),
+        reactionMS: Number(providerBaseline.reactionMS || 0),
+        processingMS: Number(providerBaseline.processingMS || 0),
+        tokenSpeed: Number(providerBaseline.tokenSpeed || 0),
+        streamOutSpeed: Number(providerBaseline.streamOutSpeed || 0)
+      };
+    }
+
+    function normalizeMetricBaselines(payload) {
+      return {
+        providers: payload && typeof payload.providers === "object" ? payload.providers : {}
+      };
+    }
+
+    async function saveMetricBaselines(providers) {
+      const payload = await apiRequest("api/dashboard-metric-baselines/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providers })
+      });
+      state.metricBaselines = normalizeMetricBaselines(payload);
+    }
+
+    async function resetMetricBaselines() {
+      const selectedProviderID = els.providerFilter.value;
+      const providers = { ...(state.metricBaselines.providers || {}) };
+      state.status.forEach(item => {
+        if (!item?.id) {
+          return;
+        }
+        if (selectedProviderID && item.id !== selectedProviderID) {
+          return;
+        }
+        providers[item.id] = {
+          requests: rawCumulativeRequestCount(item),
+          sessionRequests: rawSessionRequestCount(item),
+          completionTokens: rawCumulativeCompletionTokens(item),
+          reactionMS: Number(item.last_reaction_time_ms || item.first_token_ms || item.reaction_time_ms || 0),
+          processingMS: rawProcessingTime(item),
+          tokenSpeed: tokenGenerationSpeed(item),
+          streamOutSpeed: streamOutSpeed(item)
+        };
+      });
+      await saveMetricBaselines(providers);
+      await loadData();
+    }
+
+    function openResetConfirmModal() {
+      const selectedProviderID = els.providerFilter.value;
+      const selectedProvider = state.providers.find(provider => provider.id === selectedProviderID);
+      const scopeText = selectedProviderID ? `「${selectedProvider?.name || selectedProviderID}」` : "所有模型";
+      els.resetConfirmBody.textContent = `確定要將 ${scopeText} 的儀表板累計數值歸零嗎？原始歷史紀錄仍會保留。`;
+      els.resetConfirmModal.hidden = false;
+      els.resetConfirmModal.classList.add("active");
+      els.resetCancelButton.focus();
+    }
+
+    function closeResetConfirmModal() {
+      els.resetConfirmModal.classList.remove("active");
+      els.resetConfirmModal.hidden = true;
+      document.getElementById("refreshButton").focus();
+    }
+
+    async function confirmMetricReset() {
+      closeResetConfirmModal();
+      try {
+        await withLoadingDialog(resetMetricBaselines, "正在更新儀表板資料...");
+      } catch (_err) {
+        render();
+      }
+    }
+
+    async function loadGeneralSettings() {
+      if (!els.generalStatusMessage) return;
+      try {
+        const payload = await apiRequest("api/settings/general");
+        state.general = payload.general || { showProviderModels: false };
+        renderGeneralSettings();
+        els.generalStatusMessage.textContent = "一般設定已載入。";
+      } catch (err) {
+        if (isUnsupportedEndpointError(err)) {
+          state.general = { showProviderModels: false };
+          renderGeneralSettings();
+          els.generalStatusMessage.textContent = "一般設定使用預設值。";
+        } else {
+          els.generalStatusMessage.textContent = err.message || "無法載入一般設定。";
+        }
+      }
+    }
+
+    function renderGeneralSettings() {
+      if (!els.showProviderModelsSwitch) return;
+      if (els.languageSelect && window.LBPI18n) {
+        els.languageSelect.value = window.LBPI18n.preference();
+      }
+      els.showProviderModelsSwitch.checked = Boolean(state.general?.showProviderModels);
+      renderVersionInfo();
+    }
+
+    async function saveGeneralSettings() {
+      if (!els.showProviderModelsSwitch) return;
+      const previous = Boolean(state.general?.showProviderModels);
+      const next = Boolean(els.showProviderModelsSwitch.checked);
+      els.showProviderModelsSwitch.disabled = true;
+      els.generalStatusMessage.textContent = "一般設定儲存中。";
+      try {
+        const payload = await apiRequest("api/settings/general", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ showProviderModels: next })
+        });
+        state.general = payload.general || { showProviderModels: next };
+        renderGeneralSettings();
+        els.generalStatusMessage.textContent = state.general.showProviderModels
+          ? "模型列表會顯示 AUTO 與來源模型。"
+          : "模型列表只顯示 AUTO。";
+      } catch (err) {
+        state.general = { ...(state.general || {}), showProviderModels: previous };
+        renderGeneralSettings();
+        els.generalStatusMessage.textContent = isUnsupportedEndpointError(err)
+          ? "目前後端尚未支援一般設定儲存。"
+          : (err.message || "儲存一般設定失敗。");
+      } finally {
+        els.showProviderModelsSwitch.disabled = false;
+      }
+    }
+
+    async function loadMCPSettings() {
+      if (!els.mcpStatusMessage) return;
+      try {
+        const payload = await apiRequest("api/settings/mcp");
+        state.mcp = payload.mcp || state.mcp;
+        renderMCPSettings();
+        els.mcpStatusMessage.textContent = "MCP 設定已載入。";
+      } catch (err) {
+        renderMCPSettings();
+        els.mcpStatusMessage.textContent = err.message || "無法載入 MCP 設定。";
+      }
+    }
+
+    function renderMCPSettings() {
+      if (!els.mcpEnabledSwitch) return;
+      const mcp = state.mcp || {};
+      const endpoint = mcp.endpoint || "/mcp/";
+      let endpointURL = endpoint;
+      try {
+        endpointURL = new URL(endpoint, window.location.origin).href;
+      } catch (_err) {}
+      els.mcpEnabledSwitch.checked = mcp.enabled !== false;
+      els.mcpReadOnlySwitch.checked = Boolean(mcp.readOnly);
+      els.mcpAllowedOrigins.value = Array.isArray(mcp.allowedOrigins) ? mcp.allowedOrigins.join("\n") : "";
+      els.mcpEndpointValue.textContent = endpointURL;
+      els.mcpTransportValue.textContent = mcp.transport || "Streamable HTTP";
+      els.mcpProtocolValue.textContent = mcp.protocolVersion || "2025-11-25";
+      els.mcpToolCountValue.textContent = String(mcp.toolCount ?? (mcp.tools || []).length);
+      const tools = Array.isArray(mcp.tools) ? mcp.tools : [];
+      els.mcpToolList.innerHTML = tools.length
+        ? tools.map(tool => `<span class="mcp-tool-chip" title="${escapeHtml(tool.description || "")}">${escapeHtml(tool.name || "")}</span>`).join("")
+        : `<div class="settings-empty" style="width: 100%;">目前沒有公開工具</div>`;
+    }
+
+    async function copyMCPEndpoint() {
+      const endpoint = els.mcpEndpointValue.textContent.trim();
+      if (!endpoint) return;
+      try {
+        await navigator.clipboard.writeText(endpoint);
+        els.mcpStatusMessage.textContent = "MCP 連線位址已複製。";
+      } catch (_err) {
+        els.mcpStatusMessage.textContent = "無法複製 MCP 連線位址。";
+      }
+    }
+
+    async function saveMCPSettings() {
+      const allowedOrigins = els.mcpAllowedOrigins.value
+        .split(/\r?\n/)
+        .map(value => value.trim().replace(/\/$/, ""))
+        .filter(Boolean);
+      els.saveMcpButton.disabled = true;
+      els.mcpStatusMessage.textContent = "MCP 設定儲存中。";
+      try {
+        const payload = await apiRequest("api/settings/mcp", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            enabled: els.mcpEnabledSwitch.checked,
+            readOnly: els.mcpReadOnlySwitch.checked,
+            allowedOrigins
+          })
+        });
+        state.mcp = payload.mcp || state.mcp;
+        renderMCPSettings();
+        els.mcpStatusMessage.textContent = "MCP 設定已儲存並立即生效。";
+      } catch (err) {
+        els.mcpStatusMessage.textContent = err.message || "儲存 MCP 設定失敗。";
+      } finally {
+        els.saveMcpButton.disabled = false;
+      }
+    }
+
+	    function isUnsupportedEndpointError(err) {
+	      return String(err?.message || err || "").toLowerCase().includes("unsupported endpoint");
+	    }
+
+    async function loadAdvancedSettings() {
+      if (!els.advancedStatusMessage) return;
+      try {
+        const payload = await apiRequest("api/settings/advanced");
+        state.advanced = payload.advanced || state.advanced;
+        renderAdvancedSettings();
+        els.advancedStatusMessage.textContent = "進階設定已載入。";
+      } catch (err) {
+        renderAdvancedSettings();
+        els.advancedStatusMessage.textContent = isUnsupportedEndpointError(err)
+          ? "目前後端尚未支援進階設定。"
+          : (err.message || "無法載入進階設定。");
+      }
+    }
+
+    function renderAdvancedSettings() {
+      const advanced = state.advanced || {};
+      els.conversationAffinityTTLMinutes.value = advanced.conversationAffinityTTLMinutes ?? 30;
+      els.conversationAffinityQuotaTolerancePoints.value = advanced.conversationAffinityQuotaTolerancePoints ?? 10;
+      els.responseRouteMaxEntries.value = advanced.responseRouteMaxEntries ?? 2000;
+      els.providerCapacityCooldownSeconds.value = advanced.providerCapacityCooldownSeconds ?? 10;
+    }
+
+    function advancedSettingsInput() {
+      const settings = {
+        conversationAffinityTTLMinutes: Number(els.conversationAffinityTTLMinutes.value),
+        conversationAffinityQuotaTolerancePoints: Number(els.conversationAffinityQuotaTolerancePoints.value),
+        responseRouteMaxEntries: Number(els.responseRouteMaxEntries.value),
+        providerCapacityCooldownSeconds: Number(els.providerCapacityCooldownSeconds.value)
+      };
+      if (!Number.isInteger(settings.conversationAffinityTTLMinutes) || settings.conversationAffinityTTLMinutes < 1 || settings.conversationAffinityTTLMinutes > 10080) {
+        throw new Error("對話黏著時間必須是 1 到 10080 分鐘的整數。");
+      }
+      if (!Number.isFinite(settings.conversationAffinityQuotaTolerancePoints) || settings.conversationAffinityQuotaTolerancePoints < 0 || settings.conversationAffinityQuotaTolerancePoints > 100) {
+        throw new Error("配額容忍差必須介於 0 到 100 個百分點。");
+      }
+      if (!Number.isInteger(settings.responseRouteMaxEntries) || settings.responseRouteMaxEntries < 100 || settings.responseRouteMaxEntries > 100000) {
+        throw new Error("Response 路由上限必須是 100 到 100000 的整數。");
+      }
+      if (!Number.isInteger(settings.providerCapacityCooldownSeconds) || settings.providerCapacityCooldownSeconds < 1 || settings.providerCapacityCooldownSeconds > 300) {
+        throw new Error("容量冷卻必須是 1 到 300 秒的整數。");
+      }
+      return settings;
+    }
+
+    async function saveAdvancedSettings() {
+      let settings;
+      try {
+        settings = advancedSettingsInput();
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message;
+        return;
+      }
+
+      els.saveAdvancedButton.disabled = true;
+      els.advancedStatusMessage.textContent = "進階設定儲存中。";
+      try {
+        const payload = await apiRequest("api/settings/advanced", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings)
+        });
+        state.advanced = payload.advanced || settings;
+        renderAdvancedSettings();
+        els.advancedStatusMessage.textContent = "進階設定已儲存並立即生效。";
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message || "儲存進階設定失敗。";
+      } finally {
+        els.saveAdvancedButton.disabled = false;
+      }
+    }
+
+    async function loadNotificationSettings() {
+      if (!els.notificationStatusMessage) return;
+      try {
+        const payload = await apiRequest("api/settings/notification");
+        state.notification = payload.notification || {};
+        renderNotificationSettings();
+        els.notificationStatusMessage.textContent = "通知設定已載入。";
+      } catch (err) {
+        els.notificationStatusMessage.textContent = err.message || "無法載入通知設定。";
+      }
+    }
+
+    function renderNotificationSettings() {
+      const notification = state.notification || {};
+      els.notificationUrl.value = notification.url || "";
+      els.notificationPayload.value = notification.payload || "{\"text\":\"<msg>\"}";
+      els.notificationApiKey.value = "";
+      els.notificationApiKey.placeholder = notification.hasApiKey
+        ? "已設定 API Key，留空表示保留原金鑰"
+        : "選填";
+      syncNotificationCard();
+    }
+
+    function syncNotificationCard() {
+      if (!els.notificationTargetCard || !els.toggleNotificationTarget) return;
+      els.notificationTargetCard.classList.toggle("collapsed", state.notificationCollapsed);
+      els.toggleNotificationTarget.setAttribute("aria-expanded", String(!state.notificationCollapsed));
+    }
+
+    function toggleNotificationCard() {
+      state.notificationCollapsed = !state.notificationCollapsed;
+      localStorage.setItem("lbp.settings.notificationCollapsed", String(state.notificationCollapsed));
+      syncNotificationCard();
+    }
+
+    async function saveNotificationSettings() {
+      const payloadText = els.notificationPayload.value.trim() || "{\"text\":\"<msg>\"}";
+      if (!payloadText.includes("<msg>")) {
+        els.notificationStatusMessage.textContent = "PAYLOAD 必須包含 <msg>。";
+        els.notificationPayload.focus();
+        return;
+      }
+
+      els.saveNotificationButton.disabled = true;
+      try {
+        const payload = await apiRequest("api/settings/notification", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: els.notificationUrl.value.trim(),
+            apiKey: els.notificationApiKey.value.trim(),
+            preserveApiKey: !els.notificationApiKey.value.trim(),
+            payload: payloadText
+          })
+        });
+        state.notification = payload.notification || {};
+        renderNotificationSettings();
+        els.notificationStatusMessage.textContent = "通知目標已儲存。";
+      } catch (err) {
+        els.notificationStatusMessage.textContent = err.message || "儲存通知目標失敗。";
+      } finally {
+        els.saveNotificationButton.disabled = false;
+      }
+    }
+
+    async function testNotificationSettings() {
+      const payloadText = els.notificationPayload.value.trim() || "{\"text\":\"<msg>\"}";
+      if (!payloadText.includes("<msg>")) {
+        els.notificationStatusMessage.textContent = "PAYLOAD 必須包含 <msg>。";
+        els.notificationPayload.focus();
+        return;
+      }
+
+      els.testNotificationButton.disabled = true;
+      try {
+        await apiRequest("api/settings/notification/test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: els.notificationUrl.value.trim(),
+            apiKey: els.notificationApiKey.value.trim(),
+            preserveApiKey: !els.notificationApiKey.value.trim(),
+            payload: payloadText
+          })
+        });
+        els.notificationStatusMessage.textContent = "通知測試已送出。";
+      } catch (err) {
+        els.notificationStatusMessage.textContent = err.message || "通知測試失敗。";
+      } finally {
+        els.testNotificationButton.disabled = false;
+      }
+    }
+
+    async function loadAPIKeys() {
+      try {
+        const payload = await apiRequest("api/api-keys");
+        state.apiKeys = payload.keys || [];
+        els.keyStatusMessage.textContent = "金鑰資料已載入。";
+      } catch (err) {
+        state.apiKeys = [];
+        els.keyStatusMessage.textContent = err.message || "無法載入金鑰資料。";
+      }
+      renderAPIKeys();
+    }
+
+    function renderAPIKeys() {
+      syncKeyTabs();
+
+      const tabKeys = state.apiKeys.filter(key => apiKeyPurpose(key) === state.keyTab);
+      syncAPIKeyTypeFilter(tabKeys);
+      const visibleKeys = tabKeys.filter(key => state.keyTypeFilter === "all" || apiKeyNameType(key) === state.keyTypeFilter);
+      const supportsStatistics = state.keyTab !== "mcp";
+      if (!visibleKeys.length) {
+        const emptyText = state.keyTypeFilter !== "all"
+          ? "此名稱類型沒有可顯示的 API Key"
+          : (state.keyTab === "login" ? "尚無可顯示的登入金鑰" : state.keyTab === "mcp" ? "尚無可顯示的 MCP 金鑰" : "尚無可顯示的 Chat API Key");
+        els.apiKeyTableBody.innerHTML = `<tr><td colspan="${supportsStatistics ? 6 : 5}"><div class="settings-empty">${emptyText}</div></td></tr>`;
+        syncAPIKeyPagination(0, 1);
+        syncAPIKeySortIndicators();
+        return;
+      }
+
+      const sortedKeys = sortAPIKeys(visibleKeys);
+      const totalPages = Math.max(1, Math.ceil(sortedKeys.length / state.keyPageSize));
+      state.keyPage = Math.min(Math.max(1, state.keyPage), totalPages);
+      const start = (state.keyPage - 1) * state.keyPageSize;
+      const pageKeys = sortedKeys.slice(start, start + state.keyPageSize);
+
+      els.apiKeyTableBody.innerHTML = pageKeys.map(key => {
+        const enabled = Boolean(key.enabled);
+        const statusClass = enabled ? "status-pill" : "status-pill off";
+        const statusText = enabled ? "啟用" : "停用";
+        const maskedKey = String(key.masked_key || key.prefix || "");
+        const displayKey = compactMaskedKey(maskedKey);
+        const toggleButton = enabled
+          ? keyActionButton("pause", "停用", "data-key-disable", key.id, "primary")
+          : keyActionButton("play", "啟用", "data-key-enable", key.id, "primary");
+        return `
+          <tr>
+            <td><strong class="key-name">${escapeHtml(key.name || "未命名金鑰")}</strong></td>
+            <td><code class="key-mask" title="${escapeHtml(maskedKey)}">${escapeHtml(displayKey)}</code></td>
+            <td><span class="${statusClass}">${statusText}</span></td>
+            ${supportsStatistics ? `<td>${escapeHtml(formatUsageCount(key.usage_count))}</td>` : ""}
+            <td><span class="key-created">${escapeHtml(formatDateTime(key.created_at))}</span></td>
+            <td>
+              <div class="key-actions">
+                ${keyActionButton("edit", "修改", "data-key-edit", key.id)}
+                ${supportsStatistics ? keyActionButton("stats", "統計", "data-key-stats", key.id, "stats") : ""}
+                ${toggleButton}
+                ${keyActionButton("trash", "刪除", "data-key-delete", key.id, "danger")}
+              </div>
+            </td>
+          </tr>
+        `;
+      }).join("");
+      syncAPIKeyPagination(sortedKeys.length, totalPages);
+      syncAPIKeySortIndicators();
+    }
+
+    function syncAPIKeyTypeFilter(keys) {
+      const types = [...new Set(keys.map(apiKeyNameType))].sort((left, right) => left.localeCompare(right, window.LBPI18n?.locale() || "zh-TW"));
+      if (state.keyTypeFilter !== "all" && !types.includes(state.keyTypeFilter)) {
+        state.keyTypeFilter = "all";
+        localStorage.setItem("lbp.settings.keyTypeFilter", state.keyTypeFilter);
+      }
+      const options = [`<option value="all">全部</option>`]
+        .concat(types.map(type => `<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`));
+      els.apiKeyTypeFilter.innerHTML = options.join("");
+      els.apiKeyTypeFilter.value = state.keyTypeFilter;
+      els.apiKeyTypeFilter.disabled = keys.length === 0;
+    }
+
+    function apiKeyNameType(key) {
+      const name = String(key?.name || "").trim();
+      const slashIndex = name.indexOf("/");
+      if (slashIndex > 0) {
+        const type = name.slice(0, slashIndex).trim();
+        if (type) return type;
+      }
+      return "未分類";
+    }
+
+    function apiKeyPurpose(key) {
+      if (key?.temporary) return "login";
+      return String(key?.key_type || "").toLowerCase() === "mcp" ? "mcp" : "chat";
+    }
+
+    function keyActionButton(icon, label, dataAttr, value, extraClass = "") {
+      return `<button class="key-action-icon ${escapeHtml(extraClass)}" type="button" ${dataAttr}="${escapeHtml(value)}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${keyActionIcon(icon)}</button>`;
+    }
+
+    function keyActionIcon(icon) {
+      const icons = {
+        edit: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg>`,
+        stats: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19V5"></path><path d="M4 19h16"></path><path d="m7 15 3-4 4 2 4-7"></path></svg>`,
+        pause: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 5v14"></path><path d="M14 5v14"></path></svg>`,
+        play: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7Z"></path></svg>`,
+        trash: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5"></path><path d="M14 11v5"></path></svg>`
+      };
+      return icons[icon] || "";
+    }
+
+    function compactMaskedKey(value) {
+      const text = String(value || "").trim();
+      if (text.length <= 22) return text;
+      const maskStart = text.search(/[*•]+/);
+      if (maskStart >= 0) {
+        const prefix = text.slice(0, Math.min(maskStart, 14));
+        return `${prefix}********…`;
+      }
+      return `${text.slice(0, 20)}…`;
+    }
+
+    function formatUsageCount(value) {
+      const count = Number(value || 0);
+      if (!Number.isFinite(count) || count < 0) return "0";
+      if (count < 1000) return String(Math.floor(count));
+      return `${(count / 1000).toFixed(1)}K`;
+    }
+
+    function sortAPIKeys(keys) {
+      const direction = state.keySort.direction === "desc" ? -1 : 1;
+      return [...keys].sort((left, right) => {
+        if (state.keySort.field === "usage") {
+          const leftUsage = Number(left.usage_count || 0);
+          const rightUsage = Number(right.usage_count || 0);
+          if (leftUsage !== rightUsage) return (leftUsage - rightUsage) * direction;
+          return keyName(left).localeCompare(keyName(right), window.LBPI18n?.locale() || "zh-TW") || String(left.id || "").localeCompare(String(right.id || ""));
+        }
+        if (state.keySort.field === "created") {
+          const leftCreated = keyCreatedTime(left);
+          const rightCreated = keyCreatedTime(right);
+          if (leftCreated !== rightCreated) return (leftCreated - rightCreated) * direction;
+          return keyName(left).localeCompare(keyName(right), window.LBPI18n?.locale() || "zh-TW") || String(left.id || "").localeCompare(String(right.id || ""));
+        }
+        const nameCompare = keyName(left).localeCompare(keyName(right), window.LBPI18n?.locale() || "zh-TW");
+        if (nameCompare !== 0) return nameCompare * direction;
+        return (Number(left.usage_count || 0) - Number(right.usage_count || 0)) * direction;
+      });
+    }
+
+    function keyName(key) {
+      return String(key?.name || "未命名金鑰").trim().toLocaleLowerCase(window.LBPI18n?.locale() || "zh-TW");
+    }
+
+    function keyCreatedTime(key) {
+      const time = Date.parse(key?.created_at || "");
+      return Number.isFinite(time) ? time : 0;
+    }
+
+    function syncAPIKeyPagination(totalItems, totalPages) {
+      if (!els.apiKeyPrevPage || !els.apiKeyNextPage || !els.apiKeyPageStatus) return;
+      const hasItems = totalItems > 0;
+      els.apiKeyPageStatus.textContent = hasItems ? `${state.keyPage} / ${totalPages}` : "0 / 0";
+      els.apiKeyPrevPage.disabled = !hasItems || state.keyPage <= 1;
+      els.apiKeyNextPage.disabled = !hasItems || state.keyPage >= totalPages;
+      syncAPIKeySortIndicators();
+    }
+
+    function syncAPIKeySortIndicators() {
+      document.querySelectorAll("[data-key-sort-indicator]").forEach(indicator => {
+        const field = indicator.dataset.keySortIndicator;
+        indicator.textContent = field === state.keySort.field ? (state.keySort.direction === "desc" ? "↓" : "↑") : "";
+      });
+    }
+
+    function setAPIKeySort(field) {
+      if (field !== "name" && field !== "usage" && field !== "created") return;
+      if (state.keySort.field === field) {
+        state.keySort.direction = state.keySort.direction === "asc" ? "desc" : "asc";
+      } else {
+        state.keySort.field = field;
+        state.keySort.direction = field === "name" ? "asc" : "desc";
+      }
+      state.keyPage = 1;
+      localStorage.setItem("lbp.settings.keySortField", state.keySort.field);
+      localStorage.setItem("lbp.settings.keySortDirection", state.keySort.direction);
+      renderAPIKeys();
+    }
+
+    function syncKeyTabs() {
+      const isLoginTab = state.keyTab === "login";
+      els.chatKeyIssueCard.hidden = isLoginTab;
+      const isMCP = state.keyTab === "mcp";
+      els.apiKeyUsageHeader.hidden = isMCP;
+      if (isMCP && state.keySort.field === "usage") {
+        state.keySort.field = "name";
+        state.keySort.direction = "asc";
+        localStorage.setItem("lbp.settings.keySortField", state.keySort.field);
+        localStorage.setItem("lbp.settings.keySortDirection", state.keySort.direction);
+      }
+      els.embeddedNewApiKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "Chat API Key 名稱";
+      els.newApiKeyName.placeholder = isMCP ? "例如：Codex、Claude Desktop" : "例如：外部服務、內部測試";
+      els.embeddedCreateApiKeyLabel.textContent = isMCP ? "核發 MCP Key" : "核發 Chat API Key";
+      if (isLoginTab) {
+        els.generatedKeyBox.classList.remove("active");
+      }
+      document.querySelectorAll("[data-key-tab]").forEach(button => {
+        const active = button.dataset.keyTab === state.keyTab;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    }
+
+    async function createAPIKey(nameOverride = "", triggerButton = els.createApiKeyButton) {
+      const name = nameOverride || els.newApiKeyName.value.trim();
+      const isMCP = state.keyTab === "mcp";
+      if (!name) {
+        els.keyStatusMessage.textContent = isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 Chat API Key 名稱。";
+        els.newApiKeyName.focus();
+        return;
+      }
+
+      triggerButton.disabled = true;
+      try {
+        const payload = await apiRequest("api/api-keys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, type: isMCP ? "mcp" : "chat" })
+        });
+        const created = payload.key || {};
+        if (created.key) {
+          els.generatedKeyValue.textContent = created.key;
+          els.generatedKeyBox.classList.add("active");
+        }
+        els.newApiKeyName.value = "";
+        els.keyStatusMessage.textContent = isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "Chat API Key 已核發，只可呼叫模型列表與 Chat Completions。";
+        await loadAPIKeys();
+      } catch (err) {
+        els.keyStatusMessage.textContent = err.message || "核發 API Key 失敗。";
+      } finally {
+        triggerButton.disabled = false;
+      }
+    }
+
+    async function copyGeneratedAPIKey() {
+      const key = els.generatedKeyValue.textContent.trim();
+      if (!key) {
+        els.keyStatusMessage.textContent = "目前沒有可複製的 API Key。";
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(key);
+        els.keyStatusMessage.textContent = "API Key 已複製到剪貼簿。";
+        els.copyGeneratedKeyButton.title = "已複製";
+        window.setTimeout(() => {
+          els.copyGeneratedKeyButton.title = "複製 API Key";
+        }, 1200);
+      } catch (_err) {
+        els.keyStatusMessage.textContent = "無法寫入剪貼簿，請手動複製。";
+      }
+    }
+
+    async function setAPIKeyEnabled(id, enabled) {
+      try {
+        await apiRequest(`api/api-keys/${encodeURIComponent(id)}/${enabled ? "enable" : "disable"}`, { method: "POST" });
+        await loadAPIKeys();
+      } catch (err) {
+        els.keyStatusMessage.textContent = err.message || "更新 API Key 狀態失敗。";
+      }
+    }
+
+    async function updateAPIKeyName(id, name) {
+      try {
+        await apiRequest(`api/api-keys/${encodeURIComponent(id)}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        els.keyStatusMessage.textContent = "API Key 名稱已更新。";
+        await loadAPIKeys();
+      } catch (err) {
+        els.keyStatusMessage.textContent = err.message || "更新 API Key 名稱失敗。";
+        throw err;
+      }
+    }
+
+    async function deleteAPIKey(id) {
+      try {
+        await apiRequest(`api/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" });
+        await loadAPIKeys();
+      } catch (err) {
+        els.keyStatusMessage.textContent = err.message || "刪除 API Key 失敗。";
+      }
+    }
+
+    function openEditKeyModal(id) {
+      const key = state.apiKeys.find(item => item.id === id);
+      state.pendingEditKeyID = id;
+      els.editKeyNameInput.value = key?.name || "";
+      els.editKeyModal.hidden = false;
+      els.editKeyModal.classList.add("active");
+      window.setTimeout(() => {
+        els.editKeyNameInput.focus();
+        els.editKeyNameInput.select();
+      }, 0);
+    }
+
+    function closeEditKeyModal() {
+      state.pendingEditKeyID = "";
+      els.editKeyModal.classList.remove("active");
+      els.editKeyModal.hidden = true;
+    }
+
+    async function confirmEditAPIKey() {
+      const id = state.pendingEditKeyID;
+      if (!id) {
+        closeEditKeyModal();
+        return;
+      }
+      els.editKeyConfirmButton.disabled = true;
+      try {
+        await updateAPIKeyName(id, els.editKeyNameInput.value.trim());
+        closeEditKeyModal();
+      } catch (_err) {
+      } finally {
+        els.editKeyConfirmButton.disabled = false;
+      }
+    }
+
+    function openDeleteKeyConfirmModal(id) {
+      const key = state.apiKeys.find(item => item.id === id);
+      state.pendingDeleteKeyID = id;
+      const keyName = key?.name || "未命名金鑰";
+      els.deleteKeyConfirmBody.textContent = `確定要刪除「${keyName}」嗎？刪除後無法復原，使用此金鑰的請求會立即失效。`;
+      els.deleteKeyConfirmModal.hidden = false;
+      els.deleteKeyConfirmModal.classList.add("active");
+      els.deleteKeyCancelButton.focus();
+    }
+
+    function closeDeleteKeyConfirmModal() {
+      state.pendingDeleteKeyID = "";
+      els.deleteKeyConfirmModal.classList.remove("active");
+      els.deleteKeyConfirmModal.hidden = true;
+    }
+
+    async function confirmDeleteAPIKey() {
+      const id = state.pendingDeleteKeyID;
+      if (!id) {
+        closeDeleteKeyConfirmModal();
+        return;
+      }
+      els.deleteKeyConfirmButton.disabled = true;
+      try {
+        await deleteAPIKey(id);
+        closeDeleteKeyConfirmModal();
+      } finally {
+        els.deleteKeyConfirmButton.disabled = false;
+      }
+    }
+
+    function openKeyUsageStatsModal(id) {
+      const key = state.apiKeys.find(item => item.id === id);
+      state.pendingStatsKeyID = id;
+      state.keyUsageStatsMonth = currentMonthString();
+      els.keyUsageStatsSubtitle.textContent = `${key?.name || "未命名金鑰"} · 每日使用次數`;
+      els.keyUsageStatsModal.hidden = false;
+      els.keyUsageStatsModal.classList.add("active");
+      loadKeyUsageStats();
+    }
+
+    async function requestKeyUsageStats(id, month) {
+      const encodedID = encodeURIComponent(id);
+      const encodedMonth = encodeURIComponent(month);
+      const pathStyleURL = `api/api-keys/${encodedID}/usage?month=${encodedMonth}`;
+      const queryStyleURL = `api/api-keys/usage?id=${encodedID}&month=${encodedMonth}`;
+      try {
+        return await apiRequest(pathStyleURL);
+      } catch (err) {
+        if (!isUnsupportedEndpointError(err)) {
+          throw err;
+        }
+        return apiRequest(queryStyleURL);
+      }
+    }
+
+    function closeKeyUsageStatsModal() {
+      state.pendingStatsKeyID = "";
+      els.keyUsageStatsModal.classList.remove("active");
+      els.keyUsageStatsModal.hidden = true;
+      if (state.keyUsageStatsChart) {
+        state.keyUsageStatsChart.destroy();
+        state.keyUsageStatsChart = null;
+      }
+    }
+
+    async function loadKeyUsageStats() {
+      const id = state.pendingStatsKeyID;
+      if (!id) return;
+
+      const month = state.keyUsageStatsMonth || currentMonthString();
+      state.keyUsageStatsMonth = month;
+      syncKeyUsageStatsMonth();
+      els.keyUsageStatsMessage.textContent = "統計資料載入中。";
+      try {
+        const payload = await requestKeyUsageStats(id, month);
+        if (await renderKeyUsageChart(payload)) {
+          els.keyUsageStatsMessage.textContent = `${month} 合計 ${formatUsageCount(payload.total)} 次。`;
+        }
+      } catch (err) {
+        await renderKeyUsageChart({ month, days: [], total: 0 });
+        els.keyUsageStatsMessage.textContent = err.message || "無法載入使用統計。";
+      }
+    }
+
+    function ensureChartLibrary() {
+      if (window.Chart) {
+        return Promise.resolve(window.Chart);
+      }
+      if (chartLibraryPromise) {
+        return chartLibraryPromise;
+      }
+      chartLibraryPromise = new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js";
+        script.async = true;
+        script.onload = () => resolve(window.Chart);
+        script.onerror = () => reject(new Error("Chart.js 載入失敗。"));
+        document.head.appendChild(script);
+      }).catch(err => {
+        chartLibraryPromise = null;
+        throw err;
+      });
+      return chartLibraryPromise;
+    }
+
+    async function renderKeyUsageChart(payload) {
+      try {
+        await ensureChartLibrary();
+      } catch (err) {
+        els.keyUsageStatsMessage.textContent = err.message || "Chart.js 尚未載入，無法繪製圖表。";
+        return false;
+      }
+
+      const month = payload?.month || state.keyUsageStatsMonth || currentMonthString();
+      const dayKeys = monthDayKeys(month);
+      const countByDate = new Map((payload?.days || []).map(item => [String(item.date), Number(item.count || 0)]));
+      const labels = dayKeys.map(date => date.slice(-2));
+      const values = dayKeys.map(date => countByDate.get(date) || 0);
+
+      if (state.keyUsageStatsChart) {
+        state.keyUsageStatsChart.destroy();
+      }
+
+      state.keyUsageStatsChart = new Chart(els.keyUsageStatsChart, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [{
+            label: window.LBPI18n?.t("每日使用次數") || "每日使用次數",
+            data: values,
+            borderColor: "#111",
+            backgroundColor: "rgba(17, 17, 17, .08)",
+            borderWidth: 2,
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            tension: .28,
+            fill: true
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: items => {
+                  const index = items?.[0]?.dataIndex || 0;
+                  return dayKeys[index] || "";
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              title: { display: true, text: window.LBPI18n?.t("日期") || "日期" }
+            },
+            y: {
+              beginAtZero: true,
+              ticks: { precision: 0 },
+              title: { display: true, text: window.LBPI18n?.t("使用次數") || "使用次數" }
+            }
+          }
+        }
+      });
+      return true;
+    }
+
+    function shiftKeyUsageStatsMonth(offset) {
+      state.keyUsageStatsMonth = shiftMonth(state.keyUsageStatsMonth || currentMonthString(), offset);
+      loadKeyUsageStats();
+    }
+
+    function openProviderUsageStatsModal() {
+      state.providerUsageStatsMonth = currentMonthString();
+      els.providerUsageStatsSubtitle.textContent = "每日用量 = 當日 00:00 起始可使用量 - 最新可使用量";
+      els.providerUsageStatsModal.hidden = false;
+      els.providerUsageStatsModal.classList.add("active");
+      void loadProviderUsageStats();
+	      if (state.providerUsageStatsRefreshTimer) {
+	        window.clearInterval(state.providerUsageStatsRefreshTimer);
+	      }
+	      state.providerUsageStatsRefreshTimer = window.setInterval(() => {
+	        if (!els.providerUsageStatsModal.hidden) {
+	          void loadProviderUsageStats();
+	        }
+	      }, 60000);
+    }
+
+    function closeProviderUsageStatsModal() {
+      els.providerUsageStatsModal.classList.remove("active");
+      els.providerUsageStatsModal.hidden = true;
+	      if (state.providerUsageStatsRefreshTimer) {
+	        window.clearInterval(state.providerUsageStatsRefreshTimer);
+	        state.providerUsageStatsRefreshTimer = null;
+	      }
+      if (state.providerUsageStatsChart) {
+        state.providerUsageStatsChart.destroy();
+        state.providerUsageStatsChart = null;
+      }
+    }
+
+    async function loadProviderUsageStats() {
+      const month = state.providerUsageStatsMonth || currentMonthString();
+      state.providerUsageStatsMonth = month;
+      syncProviderUsageStatsMonth();
+      els.providerUsageStatsMessage.textContent = "統計資料載入中。";
+
+      try {
+        const payload = await apiRequest(`api/provider-usage?month=${encodeURIComponent(month)}`);
+        if (await renderProviderUsageChart(payload)) {
+          const providerCount = Number(payload?.provider_count || 0);
+          const observedDays = Number(payload?.observed_days || 0);
+	          els.providerUsageStatsSubtitle.textContent = `已啟用 ${providerCount} 個 Provider；每日用量 = 當日 00:00 起始可使用量 - 最新可使用量`;
+	          els.providerUsageStatsMessage.textContent = observedDays > 0
+	            ? `${month} 已記錄 ${observedDays} 天額度資料；當日數值會隨最新用量動態更新，23:59 後完成結算。`
+            : `${month} 尚無 Provider 額度紀錄。`;
+        }
+      } catch (err) {
+        await renderProviderUsageChart({ month, days: [], provider_count: 0, observed_days: 0 });
+        els.providerUsageStatsMessage.textContent = err.message || "無法載入 Provider 用量統計。";
+      }
+    }
+
+    async function renderProviderUsageChart(payload) {
+      try {
+        await ensureChartLibrary();
+      } catch (err) {
+        els.providerUsageStatsMessage.textContent = err.message || "Chart.js 尚未載入，無法繪製圖表。";
+        return false;
+      }
+
+      const month = payload?.month || state.providerUsageStatsMonth || currentMonthString();
+      const dayKeys = monthDayKeys(month);
+      const dailyUsage = new Map((payload?.days || []).map(item => [String(item.date), {
+	        usage: Number(item.usage_percent),
+	        remaining: Number(item.remaining_percent),
+	        providerCount: Number(item.provider_count || 0),
+	        completed: Boolean(item.completed)
+      }]));
+      const labels = dayKeys.map(date => date.slice(-2));
+	      const values = dayKeys.map(date => {
+	        const item = dailyUsage.get(date);
+	        return item && Number.isFinite(item.usage) ? item.usage : null;
+	      });
+	      const maxUsage = values.reduce((max, value) => Number.isFinite(value) ? Math.max(max, value) : max, 0);
+	      const yAxisMax = Math.max(5, Math.ceil((maxUsage * 1.1) / 5) * 5);
+
+      if (state.providerUsageStatsChart) {
+        state.providerUsageStatsChart.destroy();
+      }
+
+      state.providerUsageStatsChart = new Chart(els.providerUsageStatsChart, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{
+            label: window.LBPI18n?.t("每日使用量") || "每日使用量",
+            data: values,
+            backgroundColor: "#2f7f58",
+            hoverBackgroundColor: "#236440",
+            borderRadius: 3,
+            borderSkipped: false,
+            maxBarThickness: 20
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                title: items => {
+                  const index = items?.[0]?.dataIndex || 0;
+                  return dayKeys[index] || "";
+                },
+                label: context => {
+                  const date = dayKeys[context.dataIndex];
+                  const item = dailyUsage.get(date);
+                  if (!item) return "尚無額度紀錄";
+	                  const remainingLabel = item.completed ? "23:59 剩餘" : "目前剩餘";
+	                  return `日用量 ${percentText(item.usage)}，${remainingLabel} ${percentText(item.remaining)}（${item.providerCount} 個 Provider）`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              title: { display: true, text: window.LBPI18n?.t("日期") || "日期" }
+            },
+	            y: {
+	              min: 0,
+	              max: yAxisMax,
+              ticks: {
+                callback: value => `${value}%`
+              },
+              title: { display: true, text: window.LBPI18n?.t("每日使用量") || "每日使用量" }
+            }
+          }
+        }
+      });
+      return true;
+    }
+
+    function shiftProviderUsageStatsMonth(offset) {
+      state.providerUsageStatsMonth = shiftMonth(state.providerUsageStatsMonth || currentMonthString(), offset);
+      void loadProviderUsageStats();
+    }
+
+    function syncProviderUsageStatsMonth() {
+      const [year, month] = (state.providerUsageStatsMonth || currentMonthString()).split("-");
+      els.providerUsageStatsMonth.textContent = `${year} 年 ${month} 月`;
+    }
+
+    function syncKeyUsageStatsMonth() {
+      const [year, month] = (state.keyUsageStatsMonth || currentMonthString()).split("-");
+      els.keyUsageStatsMonth.textContent = `${year} 年 ${month} 月`;
+    }
+
+    function currentMonthString() {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    function shiftMonth(monthText, offset) {
+      const [year, month] = String(monthText || currentMonthString()).split("-").map(Number);
+      const date = new Date(year || new Date().getFullYear(), (month || 1) - 1 + offset, 1);
+      return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    }
+
+    function monthDayKeys(monthText) {
+      const [year, month] = String(monthText || currentMonthString()).split("-").map(Number);
+      const safeYear = year || new Date().getFullYear();
+      const safeMonth = month || (new Date().getMonth() + 1);
+      const days = new Date(safeYear, safeMonth, 0).getDate();
+      const prefix = `${safeYear}-${String(safeMonth).padStart(2, "0")}`;
+      return Array.from({ length: days }, (_, index) => `${prefix}-${String(index + 1).padStart(2, "0")}`);
+    }
+
+    function formatDateTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      return date.toLocaleString(window.LBPI18n?.locale() || "zh-TW", { hour12: false });
+    }
+
+    function activateSettingsPage(pageId) {
+      document.querySelectorAll(".settings-page").forEach(page => {
+        page.classList.toggle("active", page.id === pageId);
+      });
+      document.querySelectorAll(".settings-nav-button[data-settings-page]").forEach(button => {
+        button.classList.toggle("active", button.dataset.settingsPage === pageId);
+      });
+      if (pageId === "generalSettings") {
+        return loadGeneralSettings();
+      } else if (pageId === "mcpSettings") {
+        return loadMCPSettings();
+      } else if (pageId === "keySettings") {
+        return loadAPIKeys();
+      } else if (pageId === "advancedSettings") {
+        return Promise.all([loadAdvancedSettings(), loadNotificationSettings()]);
+      }
+      return Promise.resolve();
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function activateView(viewId, hash) {
+      document.querySelectorAll(".view").forEach(view => {
+        view.classList.toggle("active", view.id === viewId);
+      });
+      document.querySelectorAll(".nav-link[data-view]").forEach(link => {
+        link.classList.toggle("active", link.dataset.view === viewId);
+      });
+      if (hash && window.location.hash !== hash) {
+        history.replaceState(null, "", hash);
+      }
+      const embeddedLoad = ensureEmbeddedViewLoaded(viewId);
+      if (viewId === "dashboardView") {
+        return loadData();
+      }
+      if (viewId === "settingsView") {
+        return activateSettingsPage("generalSettings");
+      }
+      return embeddedLoad;
+    }
+
+    function ensureEmbeddedViewLoaded(viewId) {
+      const frame = document.querySelector(`#${viewId} iframe[data-src]`);
+      if (!frame || frame.dataset.loaded === "true") {
+        return Promise.resolve();
+      }
+      return new Promise(resolve => {
+        const complete = () => {
+          frame.dataset.loaded = "true";
+          resolve();
+        };
+        frame.addEventListener("load", complete, { once: true });
+        frame.addEventListener("error", complete, { once: true });
+        if (!frame.getAttribute("src")) {
+          frame.setAttribute("src", frame.dataset.src);
+        }
+      });
+    }
+
+    function initialViewId() {
+      if (window.location.hash === "#providers") return "providersView";
+      if (window.location.hash === "#benchmark") return "benchmarkView";
+      if (window.location.hash === "#system-monitor") return "systemMonitorView";
+      if (window.location.hash === "#keys") return "keysView";
+      if (window.location.hash === "#settings") return "settingsView";
+      return "dashboardView";
+    }
+
+    document.querySelectorAll("[data-view]").forEach(link => {
+      link.addEventListener("click", event => {
+        event.preventDefault();
+        void withLoadingDialog(
+          () => activateView(link.dataset.view, link.getAttribute("href")),
+          "正在取得頁面資訊..."
+        );
+      });
+    });
+
+    els.logoutButton.addEventListener("click", logout);
+    els.selectSystemUpdateButton.addEventListener("click", () => {
+      els.systemUpdateFileInput.value = "";
+      els.systemUpdateFileInput.click();
+    });
+    els.systemUpdateFileInput.addEventListener("change", () => {
+      const file = els.systemUpdateFileInput.files?.[0];
+      if (!file) return;
+      openSystemUpdateModal(file);
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        els.systemUpdateProgress.hidden = false;
+        els.systemUpdateStatus.textContent = "只接受 ZIP 更新檔。";
+        els.systemUpdateConfirmButton.disabled = true;
+      } else if (file.size > 128 * 1024 * 1024) {
+        els.systemUpdateProgress.hidden = false;
+        els.systemUpdateStatus.textContent = "更新檔案不得超過 128 MB。";
+        els.systemUpdateConfirmButton.disabled = true;
+      }
+    });
+    els.systemUpdateConfirmButton.addEventListener("click", uploadSystemUpdate);
+    els.systemUpdateCancelButton.addEventListener("click", closeSystemUpdateModal);
+    els.systemUpdateModal.addEventListener("click", event => {
+      if (event.target === els.systemUpdateModal && !state.systemUpdateXHR && !els.systemUpdateCancelButton.disabled) {
+        closeSystemUpdateModal();
+      }
+    });
+    els.totalRemainingCard.addEventListener("click", openProviderUsageStatsModal);
+    document.getElementById("refreshButton").addEventListener("click", openResetConfirmModal);
+    document.querySelectorAll(".settings-nav-button[data-settings-page]").forEach(button => {
+      button.addEventListener("click", () => {
+        void withLoadingDialog(
+          () => activateSettingsPage(button.dataset.settingsPage),
+          "正在重新載入設定..."
+        );
+      });
+    });
+    document.querySelectorAll("[data-key-tab]").forEach(button => {
+      button.addEventListener("click", () => {
+        state.keyTab = ["chat", "mcp", "login"].includes(button.dataset.keyTab) ? button.dataset.keyTab : "chat";
+        state.keyPage = 1;
+        localStorage.setItem("lbp.settings.keyTab", state.keyTab);
+        renderAPIKeys();
+      });
+    });
+    els.reloadKeysButton.addEventListener("click", () => {
+      void withLoadingDialog(loadAPIKeys, "正在重新載入金鑰資料...");
+    });
+    els.apiKeyPrevPage.addEventListener("click", () => {
+      state.keyPage = Math.max(1, state.keyPage - 1);
+      renderAPIKeys();
+    });
+    els.apiKeyNextPage.addEventListener("click", () => {
+      state.keyPage += 1;
+      renderAPIKeys();
+    });
+    els.apiKeyTypeFilter.addEventListener("change", () => {
+      state.keyTypeFilter = els.apiKeyTypeFilter.value || "all";
+      state.keyPage = 1;
+      localStorage.setItem("lbp.settings.keyTypeFilter", state.keyTypeFilter);
+      renderAPIKeys();
+    });
+    els.showProviderModelsSwitch.addEventListener("change", saveGeneralSettings);
+    els.copyMcpEndpointButton.addEventListener("click", copyMCPEndpoint);
+    els.reloadMcpButton.addEventListener("click", () => {
+      void withLoadingDialog(loadMCPSettings, "正在重新載入 MCP 設定...");
+    });
+    els.saveMcpButton.addEventListener("click", saveMCPSettings);
+    els.languageSelect.addEventListener("change", () => {
+      window.LBPI18n?.setLanguage(els.languageSelect.value);
+    });
+    els.reloadAdvancedButton.addEventListener("click", () => {
+      void withLoadingDialog(loadAdvancedSettings, "正在重新載入進階設定...");
+    });
+    els.saveAdvancedButton.addEventListener("click", saveAdvancedSettings);
+    els.toggleNotificationTarget.addEventListener("click", toggleNotificationCard);
+    els.reloadNotificationButton.addEventListener("click", () => {
+      void withLoadingDialog(loadNotificationSettings, "正在重新載入通知設定...");
+    });
+    els.testNotificationButton.addEventListener("click", testNotificationSettings);
+    els.saveNotificationButton.addEventListener("click", saveNotificationSettings);
+    document.querySelectorAll("[data-key-sort]").forEach(button => {
+      button.addEventListener("click", () => setAPIKeySort(button.dataset.keySort));
+    });
+    els.createApiKeyButton.addEventListener("click", () => createAPIKey());
+    els.copyGeneratedKeyButton.addEventListener("click", copyGeneratedAPIKey);
+	    els.apiKeyTableBody.addEventListener("click", event => {
+	      const disableID = event.target.closest("[data-key-disable]")?.dataset.keyDisable;
+	      const enableID = event.target.closest("[data-key-enable]")?.dataset.keyEnable;
+	      const editID = event.target.closest("[data-key-edit]")?.dataset.keyEdit;
+	      const statsID = event.target.closest("[data-key-stats]")?.dataset.keyStats;
+	      const deleteID = event.target.closest("[data-key-delete]")?.dataset.keyDelete;
+	      if (editID) {
+	        openEditKeyModal(editID);
+	      } else if (statsID) {
+	        openKeyUsageStatsModal(statsID);
+	      } else if (disableID) {
+	        setAPIKeyEnabled(disableID, false);
+	      } else if (enableID) {
+	        setAPIKeyEnabled(enableID, true);
+	      } else if (deleteID) {
+	        openDeleteKeyConfirmModal(deleteID);
+	      }
+	    });
+	    els.resetCancelButton.addEventListener("click", closeResetConfirmModal);
+	    els.resetConfirmButton.addEventListener("click", confirmMetricReset);
+	    els.resetConfirmModal.addEventListener("click", event => {
+	      if (event.target === els.resetConfirmModal) {
+	        closeResetConfirmModal();
+	      }
+	    });
+	    els.editKeyCancelButton.addEventListener("click", closeEditKeyModal);
+	    els.editKeyConfirmButton.addEventListener("click", confirmEditAPIKey);
+	    els.editKeyModal.addEventListener("click", event => {
+	      if (event.target === els.editKeyModal) {
+	        closeEditKeyModal();
+	      }
+	    });
+	    els.closeKeyUsageStatsButton.addEventListener("click", closeKeyUsageStatsModal);
+	    els.prevKeyUsageMonthButton.addEventListener("click", () => shiftKeyUsageStatsMonth(-1));
+	    els.nextKeyUsageMonthButton.addEventListener("click", () => shiftKeyUsageStatsMonth(1));
+	    els.keyUsageStatsModal.addEventListener("click", event => {
+	      if (event.target === els.keyUsageStatsModal) {
+	        closeKeyUsageStatsModal();
+	      }
+	    });
+	    els.closeProviderUsageStatsButton.addEventListener("click", closeProviderUsageStatsModal);
+	    els.prevProviderUsageMonthButton.addEventListener("click", () => shiftProviderUsageStatsMonth(-1));
+	    els.nextProviderUsageMonthButton.addEventListener("click", () => shiftProviderUsageStatsMonth(1));
+	    els.providerUsageStatsModal.addEventListener("click", event => {
+	      if (event.target === els.providerUsageStatsModal) {
+	        closeProviderUsageStatsModal();
+	      }
+	    });
+	    els.deleteKeyCancelButton.addEventListener("click", closeDeleteKeyConfirmModal);
+	    els.deleteKeyConfirmButton.addEventListener("click", confirmDeleteAPIKey);
+	    els.deleteKeyConfirmModal.addEventListener("click", event => {
+	      if (event.target === els.deleteKeyConfirmModal) {
+	        closeDeleteKeyConfirmModal();
+	      }
+	    });
+	    document.addEventListener("keydown", event => {
+	      if (event.key === "Escape" && !els.systemUpdateModal.hidden && !state.systemUpdateXHR && !els.systemUpdateCancelButton.disabled) {
+	        closeSystemUpdateModal();
+	      }
+	      if (event.key === "Escape" && !els.resetConfirmModal.hidden) {
+	        closeResetConfirmModal();
+	      }
+	      if (event.key === "Escape" && !els.editKeyModal.hidden) {
+	        closeEditKeyModal();
+	      }
+	      if (event.key === "Escape" && !els.keyUsageStatsModal.hidden) {
+	        closeKeyUsageStatsModal();
+	      }
+	      if (event.key === "Escape" && !els.providerUsageStatsModal.hidden) {
+	        closeProviderUsageStatsModal();
+	      }
+	      if (event.key === "Escape" && !els.deleteKeyConfirmModal.hidden) {
+	        closeDeleteKeyConfirmModal();
+	      }
+	    });
+    els.providerFilter.addEventListener("change", () => {
+      state.providerListScrollLeft = 0;
+      render();
+    });
+    els.providerList.addEventListener("scroll", () => {
+      state.providerListScrollLeft = els.providerList.scrollLeft;
+      updateProviderScrollButtons();
+    }, { passive: true });
+    els.providerScrollLeft.addEventListener("click", () => scrollProviderList(-1));
+    els.providerScrollRight.addEventListener("click", () => scrollProviderList(1));
+    window.addEventListener("resize", updateProviderScrollButtons);
+    window.addEventListener("lbp-language-changed", () => {
+      if (els.languageSelect) els.languageSelect.value = window.LBPI18n?.preference() || "auto";
+      render();
+      renderGeneralSettings();
+      if (state.keyUsageStatsChart) {
+        state.keyUsageStatsChart.data.datasets[0].label = window.LBPI18n?.t("每日使用次數") || "每日使用次數";
+        state.keyUsageStatsChart.options.scales.x.title.text = window.LBPI18n?.t("日期") || "日期";
+        state.keyUsageStatsChart.options.scales.y.title.text = window.LBPI18n?.t("使用次數") || "使用次數";
+        state.keyUsageStatsChart.update();
+      }
+      if (state.providerUsageStatsChart) {
+        state.providerUsageStatsChart.data.datasets[0].label = window.LBPI18n?.t("每日使用量") || "每日使用量";
+        state.providerUsageStatsChart.options.scales.x.title.text = window.LBPI18n?.t("日期") || "日期";
+        state.providerUsageStatsChart.options.scales.y.title.text = window.LBPI18n?.t("每日使用量") || "每日使用量";
+        state.providerUsageStatsChart.update();
+      }
+    });
+    window.addEventListener("message", event => {
+      if (event.origin !== window.location.origin || event.data?.type !== "lbp-session-expired") {
+        return;
+      }
+      checkSession();
+    });
+    document.querySelectorAll("[data-metric-mode]").forEach(button => {
+      button.addEventListener("click", () => {
+        state.metricMode = button.dataset.metricMode || "session";
+        localStorage.setItem("lbp.dashboard.metricMode", state.metricMode);
+        render();
+      });
+    });
+    async function initializeApp() {
+      showLoadingDialog("正在驗證登入狀態...");
+      try {
+        await waitForLoadingPaint();
+        if (!(await checkSession())) {
+          return;
+        }
+        updateLoadingDialog("正在取得 Provider 與服務統計...");
+        await Promise.all([
+          loadVersion(),
+          activateView(initialViewId(), window.location.hash || "#dashboard")
+        ]);
+        window.setInterval(checkSession, 60000);
+      } finally {
+        hideLoadingDialog();
+      }
+    }
+
+    initializeApp();
+    window.setInterval(() => {
+      if (document.getElementById("dashboardView").classList.contains("active")) {
+        loadData();
+      }
+    }, 10000);
+    window.setInterval(() => {
+      if (
+        document.getElementById("settingsView").classList.contains("active") &&
+        document.getElementById("keySettings").classList.contains("active")
+      ) {
+        loadAPIKeys();
+      }
+    }, 30000);
+  </script>
+</body>
+</html>
