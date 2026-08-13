@@ -95,6 +95,14 @@ copy_if_exists "agent.sample.properties" "${PACKAGE_DIR}/agent.sample.properties
 copy_if_exists "README.md" "${PACKAGE_DIR}/README.md"
 copy_if_exists "DEPLOY.md" "${PACKAGE_DIR}/DEPLOY.md"
 copy_if_exists "install.md" "${PACKAGE_DIR}/install.md"
+copy_if_exists "cmd/marsCodexApp.sh" "${PACKAGE_DIR}/cmd/marsCodexApp.sh"
+copy_if_exists "cmd/marsCodexApp.bat" "${PACKAGE_DIR}/cmd/marsCodexApp.bat"
+copy_if_exists "cmd/marsCodexApp_Linux_CLI.sh" "${PACKAGE_DIR}/cmd/marsCodexApp_Linux_CLI.sh"
+copy_if_exists "cmd/marsCodexApp_Linux_VSC_Remote.sh" "${PACKAGE_DIR}/cmd/marsCodexApp_Linux_VSC_Remote.sh"
+chmod +x \
+  "${PACKAGE_DIR}/cmd/marsCodexApp.sh" \
+  "${PACKAGE_DIR}/cmd/marsCodexApp_Linux_CLI.sh" \
+  "${PACKAGE_DIR}/cmd/marsCodexApp_Linux_VSC_Remote.sh"
 copy_if_exists "stop.sh" "${PACKAGE_DIR}/stop.sh"
 copy_if_exists "run_bg.sh" "${PACKAGE_DIR}/run_bg.sh"
 copy_if_exists "website" "${PACKAGE_DIR}/website"
@@ -203,6 +211,10 @@ verify_archive_file "website/main.html" "website/main.html"
 verify_archive_file "website/system-monitor.html" "website/system-monitor.html"
 verify_archive_file "run_bg.sh" "run_bg.sh"
 verify_archive_file "stop.sh" "stop.sh"
+verify_archive_file "cmd/marsCodexApp.sh" "cmd/marsCodexApp.sh"
+verify_archive_file "cmd/marsCodexApp.bat" "cmd/marsCodexApp.bat"
+verify_archive_file "cmd/marsCodexApp_Linux_CLI.sh" "cmd/marsCodexApp_Linux_CLI.sh"
+verify_archive_file "cmd/marsCodexApp_Linux_VSC_Remote.sh" "cmd/marsCodexApp_Linux_VSC_Remote.sh"
 
 ARCHIVE_ENTRIES="$(unzip -Z1 "${ARTIFACT}")"
 for required_path in \
@@ -211,6 +223,10 @@ for required_path in \
   "website/system-monitor.html" \
   "run_bg.sh" \
   "stop.sh" \
+  "cmd/marsCodexApp.sh" \
+  "cmd/marsCodexApp.bat" \
+  "cmd/marsCodexApp_Linux_CLI.sh" \
+  "cmd/marsCodexApp_Linux_VSC_Remote.sh" \
   "bin/${MAC_BIN_NAME}" \
   "bin/${LINUX_BIN_NAME}" \
   "bin/${LINUX_ARM_BIN_NAME}"; do

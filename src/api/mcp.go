@@ -6,6 +6,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -13,11 +16,15 @@ import (
 	"sort"
 	"strings"
 
+	_ "golang.org/x/image/webp"
+
 	"LoadBalanceProvider/src/config"
 	"LoadBalanceProvider/src/domain"
 )
 
 const mcpProtocolVersion = "2025-11-25"
+
+const mcpImagePreviewTotalMaxBytes = 512 * 1024
 
 var mcpSupportedProtocolVersions = map[string]bool{
 	"2025-11-25": true,
@@ -64,6 +71,10 @@ type mcpToolRoute struct {
 	ContentTypeArgument   string
 	DynamicPathArgument   string
 	AllowedDynamicPaths   map[string]string
+	BodyFromArguments     bool
+	BodyDefaults          map[string]interface{}
+	BodyForcedValues      map[string]interface{}
+	RichContent           bool
 }
 
 // -------------------------------------------------------------------------------------
@@ -350,6 +361,22 @@ func (_h *HTTPAPI) invokeMCPTool(_source *http.Request, _spec mcpToolSpec, _argu
 			return nil, fmt.Errorf("argument %s must be valid base64", _route.RawBodyBase64Argument)
 		}
 		_body = _decoded
+	} else if _route.BodyFromArguments {
+		_payload := make(map[string]interface{}, len(_route.BodyDefaults)+len(_arguments)+len(_route.BodyForcedValues))
+		for _key, _value := range _route.BodyDefaults {
+			_payload[_key] = _value
+		}
+		for _key, _value := range _arguments {
+			_payload[_key] = _value
+		}
+		for _key, _value := range _route.BodyForcedValues {
+			_payload[_key] = _value
+		}
+		_encoded, _err := json.Marshal(_payload)
+		if _err != nil {
+			return nil, fmt.Errorf("tool arguments cannot be encoded")
+		}
+		_body = _encoded
 	} else if _route.BodyArgument != "" {
 		_value, _ok := _arguments[_route.BodyArgument]
 		if !_ok {
@@ -395,7 +422,7 @@ func mcpToolResultFromHTTP(_status int, _headers http.Header, _body []byte) map[
 	_structuredBody := interface{}(string(_body))
 	_content := make([]map[string]interface{}, 0, 2)
 	if strings.HasPrefix(_contentType, "image/") {
-		_content = append(_content, map[string]interface{}{"type": "image", "data": base64.StdEncoding.EncodeToString(_body), "mimeType": _contentType})
+		_content = append(_content, mcpImageContentBlock(base64.StdEncoding.EncodeToString(_body), _contentType))
 		_structuredBody = map[string]interface{}{"mimeType": _contentType, "size": len(_body), "encoding": "base64"}
 	} else if strings.HasPrefix(_contentType, "audio/") {
 		_content = append(_content, map[string]interface{}{"type": "audio", "data": base64.StdEncoding.EncodeToString(_body), "mimeType": _contentType})
@@ -403,9 +430,14 @@ func mcpToolResultFromHTTP(_status int, _headers http.Header, _body []byte) map[
 	} else if json.Valid(_body) {
 		var _decoded interface{}
 		_ = json.Unmarshal(_body, &_decoded)
-		_structuredBody = _decoded
-		_pretty, _ := json.MarshalIndent(_decoded, "", "  ")
-		_content = append(_content, map[string]interface{}{"type": "text", "text": string(_pretty)})
+		if _imageContent, _sanitized, _ok := mcpGeneratedImageContent(_decoded); _ok {
+			_structuredBody = _sanitized
+			_content = append(_content, _imageContent...)
+		} else {
+			_structuredBody = _decoded
+			_pretty, _ := json.MarshalIndent(_decoded, "", "  ")
+			_content = append(_content, map[string]interface{}{"type": "text", "text": string(_pretty)})
+		}
 	} else if strings.HasPrefix(_contentType, "text/") || strings.Contains(_contentType, "xml") || strings.Contains(_contentType, "javascript") {
 		_text := string(_body)
 		if _text == "" {
@@ -422,15 +454,209 @@ func mcpToolResultFromHTTP(_status int, _headers http.Header, _body []byte) map[
 		_content = append(_content, map[string]interface{}{"type": "text", "text": fmt.Sprintf("HTTP %d (%d bytes)", _status, len(_body))})
 	}
 
-	return map[string]interface{}{
+	_result := map[string]interface{}{
 		"content": _content,
-		"structuredContent": map[string]interface{}{
+		"isError": _status < 200 || _status >= 300,
+	}
+	// Codex 會優先把 structuredContent 轉成一般 function output；若同一份結果
+	// 同時包含 image/audio block，rich content 會因此被捨棄，前端只看得到中繼
+	// 資料。媒體結果只回傳 content，讓客戶端依 MCP content block 渲染。
+	if !mcpContentHasRichMedia(_content) {
+		_result["structuredContent"] = map[string]interface{}{
 			"status":  _status,
 			"headers": _selectedHeaders,
 			"body":    _structuredBody,
-		},
-		"isError": _status < 200 || _status >= 300,
+		}
 	}
+	return _result
+}
+
+// -------------------------------------------------------------------------------------
+func mcpContentHasRichMedia(_content []map[string]interface{}) bool {
+	for _, _item := range _content {
+		_type, _ := _item["type"].(string)
+		switch strings.ToLower(strings.TrimSpace(_type)) {
+		case "image", "audio":
+			return true
+		}
+	}
+	return false
+}
+
+// -------------------------------------------------------------------------------------
+func mcpImageContentBlock(_data string, _mimeType string) map[string]interface{} {
+	return map[string]interface{}{
+		"type":     "image",
+		"data":     _data,
+		"mimeType": firstNonEmptyMCPImageMIME(_mimeType),
+		"_meta": map[string]interface{}{
+			"codex/imageDetail": "original",
+		},
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// OpenAI-compatible image APIs return JSON even when the actual image is base64.
+// Convert b64_json into MCP image blocks so clients can render and persist the result
+// directly, while keeping a compact structured result without duplicating base64 data.
+func mcpGeneratedImageContent(_decoded interface{}) ([]map[string]interface{}, interface{}, bool) {
+	_payload, _ok := _decoded.(map[string]interface{})
+	if !_ok {
+		return nil, _decoded, false
+	}
+	_items, _ok := _payload["data"].([]interface{})
+	if !_ok || len(_items) == 0 {
+		return nil, _decoded, false
+	}
+
+	_content := make([]map[string]interface{}, 0, len(_items)+1)
+	_sanitizedItems := make([]interface{}, 0, len(_items))
+	_hasImageResult := false
+	_previewBudget := mcpImagePreviewTotalMaxBytes / len(_items)
+	for _idx, _rawItem := range _items {
+		_item, _itemOK := _rawItem.(map[string]interface{})
+		if !_itemOK {
+			_sanitizedItems = append(_sanitizedItems, _rawItem)
+			continue
+		}
+		_sanitizedItem := make(map[string]interface{}, len(_item))
+		for _key, _value := range _item {
+			_sanitizedItem[_key] = _value
+		}
+
+		if _encoded, _ := _item["b64_json"].(string); strings.TrimSpace(_encoded) != "" {
+			_imageBytes, _err := base64.StdEncoding.DecodeString(strings.TrimSpace(_encoded))
+			if _err == nil && len(_imageBytes) > 0 {
+				_originalMIMEType := http.DetectContentType(_imageBytes)
+				_previewBytes, _mimeType, _isPreview := compactMCPImage(_imageBytes, _originalMIMEType, _previewBudget)
+				_content = append(_content, mcpImageContentBlock(base64.StdEncoding.EncodeToString(_previewBytes), _mimeType))
+				delete(_sanitizedItem, "b64_json")
+				_sanitizedItem["encoding"] = "base64"
+				_sanitizedItem["mime_type"] = _mimeType
+				_sanitizedItem["size"] = len(_previewBytes)
+				if _isPreview {
+					_sanitizedItem["preview"] = true
+					_sanitizedItem["original_mime_type"] = _originalMIMEType
+					_sanitizedItem["original_size"] = len(_imageBytes)
+				}
+				_hasImageResult = true
+			}
+		}
+		if _imageURL, _ := _item["url"].(string); strings.TrimSpace(_imageURL) != "" {
+			_content = append(_content, map[string]interface{}{
+				"type": "text",
+				"text": fmt.Sprintf("Generated image %d: %s", _idx+1, strings.TrimSpace(_imageURL)),
+			})
+			_hasImageResult = true
+		}
+		_sanitizedItems = append(_sanitizedItems, _sanitizedItem)
+	}
+	if !_hasImageResult {
+		return nil, _decoded, false
+	}
+
+	_sanitizedPayload := make(map[string]interface{}, len(_payload))
+	for _key, _value := range _payload {
+		_sanitizedPayload[_key] = _value
+	}
+	_sanitizedPayload["data"] = _sanitizedItems
+	return _content, _sanitizedPayload, true
+}
+
+// -------------------------------------------------------------------------------------
+// Codex 對單一 MCP 工具結果有大小保護。大型 PNG 的 base64 超出限制時，
+// 客戶端會把整份結果降級成截斷文字，導致圖片無法顯示。這裡只壓縮 MCP
+// 預覽；OpenAI 相容影像 API 的原始回應不受影響。
+// isRenderableMCPImageMIME 回報客戶端普遍能直接渲染的格式。
+// WebP 等格式雖是合法的 MCP image content，但 Codex 之類的客戶端顯示不出來，
+// 會退化成把整包 base64 JSON 印給使用者。
+func isRenderableMCPImageMIME(_mimeType string) bool {
+	switch strings.ToLower(strings.TrimSpace(_mimeType)) {
+	case "image/png", "image/jpeg", "image/jpg", "image/gif":
+		return true
+	default:
+		return false
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func compactMCPImage(_imageBytes []byte, _mimeType string, _maxBytes int) ([]byte, string, bool) {
+	if _maxBytes <= 0 {
+		_maxBytes = mcpImagePreviewTotalMaxBytes
+	}
+	_mimeType = firstNonEmptyMCPImageMIME(_mimeType)
+	// 格式由上游決定，代理只負責轉成客戶端渲染得出來的格式。
+	// 例如 WebP：MCP 客戶端（Codex）顯示不出來，會退化成印出整包 base64 JSON。
+	_renderable := isRenderableMCPImageMIME(_mimeType)
+	if _renderable && len(_imageBytes) <= _maxBytes {
+		return _imageBytes, _mimeType, false
+	}
+
+	_source, _, _err := image.Decode(bytes.NewReader(_imageBytes))
+	if _err != nil {
+		// 解不開就原樣送出，至少不會比丟棄更糟。
+		return _imageBytes, _mimeType, false
+	}
+
+	// 尺寸沒問題、只是格式不能渲染：直接無損轉 PNG，不動解析度。
+	if !_renderable && len(_imageBytes) <= _maxBytes {
+		var _buffer bytes.Buffer
+		if _err := png.Encode(&_buffer, _source); _err == nil && _buffer.Len() <= _maxBytes {
+			return _buffer.Bytes(), "image/png", false
+		}
+	}
+
+	// 照片類影像用 PNG 幾乎壓不動：相同預算下改用 JPEG 才能保住解析度，
+	// 硬要維持 PNG 會讓 1024x1024 被迫降到約一半尺寸。
+	_current := _source
+	for _scaleStep := 0; _scaleStep < 6; _scaleStep++ {
+		for _, _quality := range []int{82, 72, 62, 52, 42} {
+			var _buffer bytes.Buffer
+			if _err := jpeg.Encode(&_buffer, _current, &jpeg.Options{Quality: _quality}); _err == nil && _buffer.Len() <= _maxBytes {
+				return _buffer.Bytes(), "image/jpeg", true
+			}
+		}
+		if !scaleDownMCPImage(&_current) {
+			break
+		}
+	}
+
+	return _imageBytes, firstNonEmptyMCPImageMIME(_mimeType), false
+}
+
+// -------------------------------------------------------------------------------------
+// scaleDownMCPImage 把影像縮到 3/4；已達下限則回傳 false。
+func scaleDownMCPImage(_current *image.Image) bool {
+	_bounds := (*_current).Bounds()
+	_width := (_bounds.Dx() * 3) / 4
+	_height := (_bounds.Dy() * 3) / 4
+	if _width < 128 || _height < 128 {
+		return false
+	}
+	*_current = resizeMCPImageNearest(*_current, _width, _height)
+	return true
+}
+
+// -------------------------------------------------------------------------------------
+func resizeMCPImageNearest(_source image.Image, _width int, _height int) image.Image {
+	_bounds := _source.Bounds()
+	_resized := image.NewRGBA(image.Rect(0, 0, _width, _height))
+	for _y := 0; _y < _height; _y++ {
+		_sourceY := _bounds.Min.Y + (_y*_bounds.Dy())/_height
+		for _x := 0; _x < _width; _x++ {
+			_sourceX := _bounds.Min.X + (_x*_bounds.Dx())/_width
+			_resized.Set(_x, _y, _source.At(_sourceX, _sourceY))
+		}
+	}
+	return _resized
+}
+
+// -------------------------------------------------------------------------------------
+func firstNonEmptyMCPImageMIME(_mimeType string) string {
+	if strings.HasPrefix(strings.TrimSpace(_mimeType), "image/") {
+		return strings.TrimSpace(_mimeType)
+	}
+	return "image/png"
 }
 
 // -------------------------------------------------------------------------------------
@@ -462,13 +688,17 @@ func mcpToolSpecs() []mcpToolSpec {
 		return map[string]interface{}{"type": "array", "description": _description, "items": map[string]interface{}{"type": "string"}}
 	}
 	_tool := func(_name string, _title string, _description string, _schema map[string]interface{}, _route mcpToolRoute, _readOnly bool, _destructive bool, _openWorld bool) mcpToolSpec {
+		var _outputSchema map[string]interface{}
+		if !_route.RichContent {
+			_outputSchema = mcpHTTPOutputSchema()
+		}
 		return mcpToolSpec{
 			Definition: mcpToolDefinition{
 				Name:         _name,
 				Title:        _title,
 				Description:  _description,
 				InputSchema:  _schema,
-				OutputSchema: mcpHTTPOutputSchema(),
+				OutputSchema: _outputSchema,
 				Annotations: map[string]interface{}{
 					"readOnlyHint":    _readOnly,
 					"destructiveHint": _destructive,
@@ -479,6 +709,28 @@ func mcpToolSpecs() []mcpToolSpec {
 			Route:    _route,
 			ReadOnly: _readOnly,
 		}
+	}
+	_imageGenerationSchema := mcpObjectSchema(map[string]interface{}{
+		"prompt":             _string("Required description of the image to generate"),
+		"model":              _string("Optional model name; omit or use AUTO for load balancing"),
+		"provider_id":        _string("Optional Provider ID; omit for load balancing"),
+		"n":                  map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 10, "description": "Number of images to generate"},
+		"size":               _string("Optional output size supported by the selected model"),
+		"quality":            _string("Optional quality level supported by the selected model"),
+		"background":         _string("Optional background mode, such as transparent, opaque, or auto"),
+		"output_format":      _string("Optional output format, such as png, jpeg, or webp"),
+		"output_compression": map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 100, "description": "Optional output compression percentage"},
+		"response_format":    map[string]interface{}{"type": "string", "enum": []string{"b64_json", "url"}, "description": "Optional OpenAI-compatible response format"},
+		"moderation":         _string("Optional moderation setting supported by the selected model"),
+		"user":               _string("Optional end-user identifier forwarded to the Provider"),
+	}, "prompt")
+	_imageGenerationRoute := mcpToolRoute{
+		Method:            http.MethodPost,
+		Path:              "/v1/images/generations",
+		BodyFromArguments: true,
+		BodyDefaults:      map[string]interface{}{"response_format": "b64_json"},
+		BodyForcedValues:  map[string]interface{}{"response_format": "b64_json"},
+		RichContent:       true,
 	}
 
 	return []mcpToolSpec{
@@ -530,7 +782,9 @@ func mcpToolSpecs() []mcpToolSpec {
 		_tool("responses_compact_stored", "Compact stored response", "Compact the context of an existing stored response.", mcpObjectSchema(map[string]interface{}{"response_id": _string("Response ID"), "request": _object("Compaction request")}, "response_id", "request"), mcpToolRoute{Method: http.MethodPost, Path: "/v1/responses/{response_id}/compact", PathArguments: map[string]string{"response_id": "{response_id}"}, BodyArgument: "request"}, false, false, true),
 		_tool("responses_input_items", "List response input items", "List input items for a stored response.", mcpObjectSchema(map[string]interface{}{"response_id": _string("Response ID"), "after": _string("Optional pagination cursor"), "limit": map[string]interface{}{"type": "integer", "minimum": 1}, "order": _string("Optional sort order")}, "response_id"), mcpToolRoute{Method: http.MethodGet, Path: "/v1/responses/{response_id}/input_items", PathArguments: map[string]string{"response_id": "{response_id}"}, QueryArguments: map[string]string{"after": "after", "limit": "limit", "order": "order"}}, true, false, true),
 		_tool("responses_output_items", "List response output items", "List output items for a stored response.", mcpObjectSchema(map[string]interface{}{"response_id": _string("Response ID"), "after": _string("Optional pagination cursor"), "limit": map[string]interface{}{"type": "integer", "minimum": 1}, "order": _string("Optional sort order")}, "response_id"), mcpToolRoute{Method: http.MethodGet, Path: "/v1/responses/{response_id}/output_items", PathArguments: map[string]string{"response_id": "{response_id}"}, QueryArguments: map[string]string{"after": "after", "limit": "limit", "order": "order"}}, true, false, true),
-		_tool("multimodal_request", "Multimodal API request", "Call a supported image, audio, or video endpoint. Supply payload for JSON or body_base64 plus content_type for multipart/binary bodies.", mcpObjectSchema(map[string]interface{}{"endpoint": map[string]interface{}{"type": "string", "enum": []string{"images_generate", "images_edit", "images_variation", "audio_transcribe", "audio_translate", "audio_speech", "video_analyze", "video_generate"}}, "payload": _object("JSON request payload"), "body_base64": _string("Optional base64-encoded raw request body"), "content_type": _string("Request media type when body_base64 is supplied")}, "endpoint"), mcpToolRoute{Method: http.MethodPost, DynamicPathArgument: "endpoint", AllowedDynamicPaths: map[string]string{"images_generate": "/v1/images/generations", "images_edit": "/v1/images/edits", "images_variation": "/v1/images/variations", "audio_transcribe": "/v1/audio/transcriptions", "audio_translate": "/v1/audio/translations", "audio_speech": "/v1/audio/speech", "video_analyze": "/v1/videos/analysis", "video_generate": "/v1/videos/generations"}, BodyArgument: "payload", RawBodyBase64Argument: "body_base64", ContentTypeArgument: "content_type"}, false, false, true),
+		_tool("image_gen", "Generate image", "Generate one or more images through an enabled image-generation Provider. The result is returned as MCP image content when the Provider supplies base64 image data.", _imageGenerationSchema, _imageGenerationRoute, false, false, true),
+		_tool("image_generate", "Generate image (legacy alias)", "Compatibility alias for image_gen.", _imageGenerationSchema, _imageGenerationRoute, false, false, true),
+		_tool("multimodal_request", "Multimodal API request", "Call a supported image, audio, or video endpoint. Supply payload for JSON or body_base64 plus content_type for multipart/binary bodies.", mcpObjectSchema(map[string]interface{}{"endpoint": map[string]interface{}{"type": "string", "enum": []string{"images_generate", "images_edit", "images_variation", "audio_transcribe", "audio_translate", "audio_speech", "video_analyze", "video_generate"}}, "payload": _object("JSON request payload"), "body_base64": _string("Optional base64-encoded raw request body"), "content_type": _string("Request media type when body_base64 is supplied")}, "endpoint"), mcpToolRoute{Method: http.MethodPost, DynamicPathArgument: "endpoint", AllowedDynamicPaths: map[string]string{"images_generate": "/v1/images/generations", "images_edit": "/v1/images/edits", "images_variation": "/v1/images/variations", "audio_transcribe": "/v1/audio/transcriptions", "audio_translate": "/v1/audio/translations", "audio_speech": "/v1/audio/speech", "video_analyze": "/v1/videos/analysis", "video_generate": "/v1/videos/generations"}, BodyArgument: "payload", RawBodyBase64Argument: "body_base64", ContentTypeArgument: "content_type", RichContent: true}, false, false, true),
 	}
 }
 

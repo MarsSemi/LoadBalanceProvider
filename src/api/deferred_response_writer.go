@@ -118,6 +118,20 @@ func (_w *deferredResponseWriter) Commit() error {
 }
 
 // -------------------------------------------------------------------------------------
+// ResetForGracefulTerminal 丟棄尚未送出的緩衝內容，讓呼叫端改用一則正常完成的訊息收尾。
+// 已經送出任何內容後不可使用（回傳 false）。
+func (_w *deferredResponseWriter) ResetForGracefulTerminal() bool {
+	if _w.committed {
+		return false
+	}
+	_w.buffer.Reset()
+	_w.statusCode = 0
+	_w.header = make(http.Header)
+	_w.writeErr = nil
+	return true
+}
+
+// -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Committed() bool {
 	return _w != nil && _w.committed
 }

@@ -1896,7 +1896,7 @@
                 <div class="settings-card-title">Streamable HTTP 端點</div>
                 <div class="settings-card-body">
                   <div class="settings-option-title">MCP 連線位址</div>
-                  <div class="settings-option-copy">請先在金鑰管理核發 MCP 專用金鑰，再透過 Authorization: Bearer 或 X-API-Key 連線。Chat 與登入金鑰無法呼叫 MCP。</div>
+                  <div class="settings-option-copy">可使用 API 金鑰或 MCP 專用金鑰，透過 Authorization: Bearer 或 X-API-Key 連線。MCP 金鑰僅可呼叫 MCP，登入金鑰無法呼叫 MCP。</div>
                   <div class="mcp-endpoint-row">
                     <code class="mcp-endpoint-code" id="mcpEndpointValue">/mcp/</code>
                     <button class="soft-button" type="button" id="copyMcpEndpointButton">複製位址</button>
@@ -2035,7 +2035,7 @@
               </div>
 
               <div class="key-tabs" role="tablist" aria-label="金鑰類型">
-                <button class="key-tab-button active" type="button" data-key-tab="chat" role="tab" aria-selected="true">Chat 金鑰</button>
+                <button class="key-tab-button active" type="button" data-key-tab="chat" role="tab" aria-selected="true">API 金鑰</button>
                 <button class="key-tab-button" type="button" data-key-tab="mcp" role="tab" aria-selected="false">MCP 金鑰</button>
                 <button class="key-tab-button" type="button" data-key-tab="login" role="tab" aria-selected="false">登入金鑰</button>
               </div>
@@ -2045,10 +2045,10 @@
                 <div class="settings-card-body">
                   <div class="form-row">
                     <label class="field">
-                      <span id="embeddedNewApiKeyLabel">Chat API Key 名稱</span>
+                      <span id="embeddedNewApiKeyLabel">API Key 名稱</span>
                       <input class="text-input" id="newApiKeyName" type="text" placeholder="例如：外部服務、內部測試">
                     </label>
-                    <button class="primary-button" type="button" id="createApiKeyButton"><span id="embeddedCreateApiKeyLabel">核發 Chat API Key</span></button>
+                    <button class="primary-button" type="button" id="createApiKeyButton"><span id="embeddedCreateApiKeyLabel">核發 API Key</span></button>
 	                  </div>
 	                  <div class="generated-key" id="generatedKeyBox">
 	                    <div class="generated-key-header">
@@ -3791,7 +3791,7 @@
       if (!visibleKeys.length) {
         const emptyText = state.keyTypeFilter !== "all"
           ? "此名稱類型沒有可顯示的 API Key"
-          : (state.keyTab === "login" ? "尚無可顯示的登入金鑰" : state.keyTab === "mcp" ? "尚無可顯示的 MCP 金鑰" : "尚無可顯示的 Chat API Key");
+          : (state.keyTab === "login" ? "尚無可顯示的登入金鑰" : state.keyTab === "mcp" ? "尚無可顯示的 MCP 金鑰" : "尚無可顯示的 API Key");
         els.apiKeyTableBody.innerHTML = `<tr><td colspan="${supportsStatistics ? 6 : 5}"><div class="settings-empty">${emptyText}</div></td></tr>`;
         syncAPIKeyPagination(0, 1);
         syncAPIKeySortIndicators();
@@ -3967,9 +3967,9 @@
         localStorage.setItem("lbp.settings.keySortField", state.keySort.field);
         localStorage.setItem("lbp.settings.keySortDirection", state.keySort.direction);
       }
-      els.embeddedNewApiKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "Chat API Key 名稱";
+      els.embeddedNewApiKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "API Key 名稱";
       els.newApiKeyName.placeholder = isMCP ? "例如：Codex、Claude Desktop" : "例如：外部服務、內部測試";
-      els.embeddedCreateApiKeyLabel.textContent = isMCP ? "核發 MCP Key" : "核發 Chat API Key";
+      els.embeddedCreateApiKeyLabel.textContent = isMCP ? "核發 MCP Key" : "核發 API Key";
       if (isLoginTab) {
         els.generatedKeyBox.classList.remove("active");
       }
@@ -3984,7 +3984,7 @@
       const name = nameOverride || els.newApiKeyName.value.trim();
       const isMCP = state.keyTab === "mcp";
       if (!name) {
-        els.keyStatusMessage.textContent = isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 Chat API Key 名稱。";
+        els.keyStatusMessage.textContent = isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 API Key 名稱。";
         els.newApiKeyName.focus();
         return;
       }
@@ -4002,7 +4002,7 @@
           els.generatedKeyBox.classList.add("active");
         }
         els.newApiKeyName.value = "";
-        els.keyStatusMessage.textContent = isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "Chat API Key 已核發，只可呼叫模型列表與 Chat Completions。";
+        els.keyStatusMessage.textContent = isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "API Key 已核發，可呼叫一般 API 與 MCP。";
         await loadAPIKeys();
       } catch (err) {
         els.keyStatusMessage.textContent = err.message || "核發 API Key 失敗。";

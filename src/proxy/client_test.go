@@ -1281,3 +1281,53 @@ func TestPromptCacheRouteCountsOnlyCountsConversations(t *testing.T) {
 		t.Fatalf("unknown provider bound = %d, want 0", _counts["provider-c"])
 	}
 }
+
+// -------------------------------------------------------------------------------------
+// 上游的一般性暫時錯誤（訊息本身就寫著可重試）應歸類為可重試，
+// 但內容政策拒絕必須維持不可重試 —— 換帳號重試也只會再被擋一次。
+func TestRetryableUpstreamFailureClassification(t *testing.T) {
+	_retryable := []string{
+		"An error occurred while processing your request. You can retry your request, or contact us through our help center at help.openai.com if the error persists. Please include the request ID abc.",
+		"internal server error",
+		"Please try again later",
+	}
+	for _, _text := range _retryable {
+		if !providerErrorTextIsRetryableUpstreamFailure(_text) {
+			t.Fatalf("should be retryable: %q", _text)
+		}
+	}
+
+	_notRetryable := []string{
+		"This content was flagged for possible cybersecurity risk.",
+		"request blocked by content policy",
+		"",
+	}
+	for _, _text := range _notRetryable {
+		if providerErrorTextIsRetryableUpstreamFailure(_text) {
+			t.Fatalf("must not be retryable: %q", _text)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 上游思考很久、最後一次沖出整段回應時，牆鐘窗會極短（此例 45ms/108 tokens ≈ 2400 tok/s）。
+// 那量到的是 socket flush 而非生成速率，必須退回整段請求時間，
+// 且不得因為 provider 有自報時間就跳過這個保護。
+func TestGenerationSpeedIgnoresBufferedBurstEvenWithProviderTiming(t *testing.T) {
+	_metrics := ChatMetrics{
+		CompletionTokens: 108,
+		FirstResponseMS:  5000,
+		TotalResponseMS:  5045,
+		ProviderTiming:   true,
+		GenerationTPS:    2400,
+	}
+
+	_speed := _metrics.TokenGenerationSpeed(5045 * time.Millisecond)
+	if _speed > 100 {
+		t.Fatalf("generation speed = %.1f tok/s, want the end-to-end rate (~21), not the flush burst", _speed)
+	}
+	_expected := 108.0 / 5.045
+	if math.Abs(_speed-_expected) > 0.5 {
+		t.Fatalf("generation speed = %.2f, want ≈ %.2f", _speed, _expected)
+	}
+}

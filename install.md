@@ -8,6 +8,8 @@
 - `bin/LoadBalanceProvider_linux_x64`：Linux x86_64 / amd64。
 - `bin/LoadBalanceProvider_linux_arm64`：Linux arm64 / aarch64。
 
+部署 zip 也包含 `cmd/` 下四個 Codex App／CLI 設定腳本；封裝只收錄正式腳本，不會包含開發期間的 `.bak` 檔案。
+
 正式執行檔不直接放在根目錄，需透過 `install.sh` 依照目前 OS 與 CPU 架構複製。
 
 ## 安裝與啟動
@@ -81,3 +83,41 @@ agent.sample.properties -> agent.properties
 - Linux arm64 / aarch64
 
 其他平台會停止並顯示不支援訊息。若要支援其他架構，需要在 `build.sh` 增加對應的 `GOOS/GOARCH` 編譯目標，並同步更新 `install.sh` 的平台判斷。
+
+## Codex App 用戶端設定
+
+原始碼的 `cmd/` 目錄包含 Codex App／CLI 設定工具：
+
+- macOS：`cmd/marsCodexApp.sh`
+- Windows：`cmd/marsCodexApp.bat`
+- Ubuntu CLI／桌面環境：`cmd/marsCodexApp_Linux_CLI.sh`
+- VS Code SSH Remote：`cmd/marsCodexApp_Linux_VSC_Remote.sh`
+
+若從下載站取得腳本，文件中的網址一律是範例，請替換成實際的內部發佈位置：
+
+```bash
+curl -fsSL https://example.com/downloads/marsCodexApp.sh -o marsCodexApp.sh
+chmod +x marsCodexApp.sh
+./marsCodexApp.sh
+```
+
+```powershell
+Invoke-WebRequest https://example.com/downloads/marsCodexApp.bat -OutFile marsCodexApp.bat
+.\marsCodexApp.bat
+```
+
+`example.com` 不是真實腳本位置，部署文件不會揭露正式下載網址。
+
+這些工具會偵測目前使用者的 Codex 設定目錄，不使用寫死的帳號或家目錄。套用 Mars 來源時會：
+
+- 寫入使用者環境變數 `MARS_API_KEY`。
+- 下載完整 Codex model catalog。
+- 設定 Mars Responses Provider。
+- 啟用 Codex 影像生成功能與 Mars MCP `image_gen` 工具。
+- 合併現有 `config.toml`，保留 `[projects."..."]` 與其他非 Mars 設定。
+
+工具仍會建立 `config.toml.mars-llm-proxy.bak` 作為緊急備份，但正常「恢復 Codex 原始設定」不會使用該檔案覆蓋。恢復流程只會移除 Mars 管理內容、model catalog 與 `MARS_API_KEY`，並還原套用前的作用中 Provider；因此目前的專案信任及其他個人設定會保留。
+
+若 `config.toml` 已經定義其他 Provider 或 Profile，這些區段不會被移除。工具會把原本的頂層 `model`、`model_provider`、`model_catalog_json`、`profile` 保存至 `config.toml.mars-llm-proxy.defaults`，再將 model／Provider／catalog 切換到 Mars，並暫時清除可能衝突的作用中 profile。恢復時會把原值寫回，因此可以和既有 Provider 共存，也能回到套用前的預設來源。
+
+若備份檔已存在，可選擇覆蓋或保留；兩種選擇都不會中止後續套用。操作完成後必須完整重啟 Codex App、CLI 或 VS Code Extension Host。

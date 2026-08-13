@@ -141,13 +141,13 @@
     <header class="page-header">
       <div class="title-group">
         <h1>金鑰管理</h1>
-        <p class="muted">分別核發 Chat 與 MCP 專用金鑰；兩種金鑰不可交叉呼叫。</p>
+        <p class="muted">API 金鑰可呼叫一般 API 與 MCP；MCP 金鑰僅可呼叫 MCP。</p>
       </div>
       <button class="button" type="button" id="reloadButton"><i data-lucide="refresh-cw"></i>重新載入</button>
     </header>
 
     <div class="tabs" role="tablist" aria-label="金鑰類型">
-      <button class="tab active" type="button" data-tab="chat">Chat 金鑰</button>
+      <button class="tab active" type="button" data-tab="chat">API 金鑰</button>
       <button class="tab" type="button" data-tab="mcp">MCP 金鑰</button>
       <button class="tab" type="button" data-tab="login">登入金鑰</button>
     </div>
@@ -156,10 +156,10 @@
     <section class="card issue-card" id="issueCard">
       <div class="issue-row">
         <label class="field">
-          <span id="newKeyLabel">Chat API Key 名稱</span>
+          <span id="newKeyLabel">API Key 名稱</span>
           <input class="input" id="newKeyName" type="text" autocomplete="off" placeholder="例如：外部服務、內部測試">
         </label>
-        <button class="button primary" type="button" id="createButton"><i data-lucide="key-round"></i><span id="createButtonLabel">核發 Chat API Key</span></button>
+        <button class="button primary" type="button" id="createButton"><i data-lucide="key-round"></i><span id="createButtonLabel">核發 API Key</span></button>
       </div>
       <div class="generated" id="generatedBox">
         <div>
@@ -333,9 +333,9 @@
         localStorage.setItem("lbp.keys.sortField", state.sortField);
         localStorage.setItem("lbp.keys.sortDirection", state.sortDirection);
       }
-      els.newKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "Chat API Key 名稱";
+      els.newKeyLabel.textContent = isMCP ? "MCP Key 名稱" : "API Key 名稱";
       els.newKeyName.placeholder = isMCP ? "例如：Codex、Claude Desktop" : "例如：外部服務、內部測試";
-      els.createButtonLabel.textContent = isMCP ? "核發 MCP Key" : "核發 Chat API Key";
+      els.createButtonLabel.textContent = isMCP ? "核發 MCP Key" : "核發 API Key";
       const items = visibleKeys();
       const pages = Math.max(1, Math.ceil(items.length / state.pageSize));
       state.page = Math.min(Math.max(1, state.page), pages);
@@ -397,7 +397,7 @@
     async function createKey() {
       const name = els.newKeyName.value.trim();
       const isMCP = state.tab === "mcp";
-      if (!name) { setStatus(isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 Chat API Key 名稱。", "error"); els.newKeyName.focus(); return; }
+      if (!name) { setStatus(isMCP ? "請先輸入 MCP Key 名稱。" : "請先輸入 API Key 名稱。", "error"); els.newKeyName.focus(); return; }
       showLoading("正在核發金鑰...");
       try {
         const payload = await api("api/api-keys", { method: "POST", body: JSON.stringify({ name, type: isMCP ? "mcp" : "chat" }) });
@@ -406,7 +406,7 @@
         els.generatedBox.classList.add("active");
         els.newKeyName.value = "";
         render();
-        setStatus(isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "Chat API Key 已核發，路由策略預設為 AUTO。", "success");
+        setStatus(isMCP ? "MCP Key 已核發，只能用於 MCP 端點。" : "API Key 已核發，路由策略預設為 AUTO。", "success");
       } catch (error) { setStatus(error.message, "error"); } finally { hideLoading(); }
     }
 

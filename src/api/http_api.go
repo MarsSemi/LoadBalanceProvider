@@ -53,6 +53,9 @@ var _serviceStartedAt = time.Now()
 const (
 	sessionCookieName               = "lbp_api_key"
 	defaultProviderCapacityCooldown = 10 * time.Second
+	// 釘住 provider 的請求只在原帳號上重試，次數刻意保守，避免拖長使用者等待。
+	pinnedProviderMaxRetries   = 2
+	pinnedProviderRetryBackoff = 400 * time.Millisecond
 )
 
 // -------------------------------------------------------------------------------------
@@ -743,7 +746,7 @@ func (_h *HTTPAPI) authorizeRequest(_w http.ResponseWriter, _r *http.Request, _r
 // -------------------------------------------------------------------------------------
 func canAccessRoute(_key auth.APIKeyView, _fromCookie bool, _method string, _route string) bool {
 	if isMCPRoute(_route) {
-		return !_key.Temporary && _key.KeyType == auth.APIKeyTypeMCP
+		return !_key.Temporary && (_key.KeyType == auth.APIKeyTypeChat || _key.KeyType == auth.APIKeyTypeMCP)
 	}
 	if _key.Temporary {
 		return _fromCookie
@@ -2791,7 +2794,7 @@ func (_h *HTTPAPI) handleChatCompletions(_w http.ResponseWriter, _r *http.Reques
 		return
 	}
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, proxy.ChatRefusalTerminal, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardChatCompletion(_ctx, _attemptWriter, _r, _target, _model, &_chatReq, _body, _profile, _selectionMeta)
 	})
 }
@@ -2826,7 +2829,7 @@ func (_h *HTTPAPI) handleResponsesProxy(_w http.ResponseWriter, _r *http.Request
 	}
 
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, proxy.ResponsesRefusalTerminal, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardResponses(_ctx, _attemptWriter, _r, _target, _model, _body, _profile, _selectionMeta)
 	})
 }
@@ -3006,10 +3009,13 @@ func requestForwardContext(_parent context.Context, _timeout time.Duration, _str
 type providerForwardAttempt func(context.Context, http.ResponseWriter, *balancer.ProviderRuntime, *domain.LLMModelConfig, domain.RequestProfile, balancer.SelectionMeta) (proxy.ChatMetrics, error)
 
 // -------------------------------------------------------------------------------------
-func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _forward providerForwardAttempt) {
-	_maxRetries := 0
-	if strings.TrimSpace(_request.ProviderID) == "" && strings.TrimSpace(_request.Provider) == "" {
-		_maxRetries = _h.providerRetryCount()
+func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _refusalTerminal func(string) []byte, _forward providerForwardAttempt) {
+	// 釘住 provider 的請求（對話黏著或金鑰強制路由）不能換帳號，否則延續性內容會失效；
+	// 但同一個帳號的暫時性錯誤仍可重試，對使用者是無痕的。
+	_pinnedProvider := strings.TrimSpace(_request.ProviderID) != "" || strings.TrimSpace(_request.Provider) != ""
+	_maxRetries := _h.providerRetryCount()
+	if _pinnedProvider && _maxRetries > pinnedProviderMaxRetries {
+		_maxRetries = pinnedProviderMaxRetries
 	}
 	_excluded := []string{}
 	var _lastErr error
@@ -3074,11 +3080,58 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 			if _deferred.Committed() {
 				return
 			}
+			// 重試用盡且確定沒有送出任何內容：用一則「正常完成」的訊息收尾。
+			// 回 502 會讓客戶端判定串流中斷並顯示「正在重新連線」，反而比原本更吵。
+			if _h.writeGracefulStreamTerminal(_w, _deferred, _request.Stream, _refusalTerminal, _forwardErr) {
+				return
+			}
 			_h.writeJSON(_w, http.StatusBadGateway, domain.ErrorResponse("provider_error", _forwardErr.Error()))
 			return
 		}
 
+		if _pinnedProvider {
+			// 保留原 provider 讓下一輪重選到同一個帳號；短暫退避讓上游的暫時性故障有機會恢復。
+			if !waitBeforeRetry(_r.Context(), _attempt) {
+				return
+			}
+			continue
+		}
 		_excluded = append(_excluded, _target.Config.ID)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// writeGracefulStreamTerminal 在重試用盡時，用一則正常完成的串流訊息收尾並帶出原因。
+// 只有「串流請求」且「確定尚未送出任何內容」時適用；回傳 false 代表無法收尾，
+// 呼叫端應改回一般錯誤回應。
+func (_h *HTTPAPI) writeGracefulStreamTerminal(_w http.ResponseWriter, _deferred *deferredResponseWriter, _stream bool, _refusalTerminal func(string) []byte, _err error) bool {
+	if !_stream || _refusalTerminal == nil || _err == nil || _deferred == nil {
+		return false
+	}
+	if !_deferred.ResetForGracefulTerminal() {
+		return false
+	}
+	_deferred.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	_deferred.Header().Set("Cache-Control", "no-cache")
+	_deferred.Header().Set("X-Accel-Buffering", "no")
+	_deferred.WriteHeader(http.StatusOK)
+	if _, _writeErr := _deferred.Write(_refusalTerminal(_err.Error())); _writeErr != nil {
+		return false
+	}
+	return _deferred.Commit() == nil
+}
+
+// -------------------------------------------------------------------------------------
+// waitBeforeRetry 在重試同一個 provider 前做短暫退避。回傳 false 代表請求已被取消。
+func waitBeforeRetry(_ctx context.Context, _attempt int) bool {
+	_delay := time.Duration(_attempt+1) * pinnedProviderRetryBackoff
+	_timer := time.NewTimer(_delay)
+	defer _timer.Stop()
+	select {
+	case <-_timer.C:
+		return true
+	case <-_ctx.Done():
+		return false
 	}
 }
 

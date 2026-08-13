@@ -106,7 +106,7 @@ http://<host>:<port>/mcp/
 
 MCP は既定で有効で、プロトコルバージョンは `2025-11-25` です。`initialize`、`notifications/initialized`、`ping`、`tools/list`、`tools/call` をサポートします。サーバー主導の SSE 接続は維持しないため、仕様に従って `GET /mcp/` は `405 Method Not Allowed` を返し、各 JSON-RPC メッセージは個別の HTTP `POST` を使用します。
 
-接続前に、管理画面の **キー管理 > MCP キー** で MCP 専用キーを発行し、そのキーで認証します。
+管理画面の **キー管理** で発行した API キーまたは MCP 専用キーで認証できます。
 
 ```http
 POST /mcp/ HTTP/1.1
@@ -117,7 +117,7 @@ Accept: application/json, text/event-stream
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example","version":"1.0.0"}}}
 ```
 
-Chat API Key と一時的な Web ログインキーは MCP を呼び出せません。MCP キーも Chat、Responses、その他の一般 REST API を呼び出せません。MCP キーについては累積および月次利用統計を収集しません。
+API Key は一般 REST API と MCP を呼び出せます。一時的な Web ログインキーは MCP を呼び出せません。MCP キーは MCP のみ呼び出せ、Chat、Responses、その他の一般 REST API は呼び出せません。また、累積および月次利用統計も収集しません。
 
 管理画面の **設定 > MCP** では、次の操作ができます。
 
@@ -166,6 +166,25 @@ Provider と通知先 URL は `http` と `https` のみ許可します。link-lo
 3. 戦略レイヤーは selection meta を生成し、レスポンスヘッダーに `X-Proxy-Strategy`、`X-Proxy-Provider`、`X-Proxy-Model` などを追加します。
 4. 将来のコスト、遅延、能力分類、健全性などの戦略向けに `weighted_score` 実装を保持しています。
 5. Responses の後続リクエストが `previous_response_id` または `prompt_cache_key` のアフィニティルートに一致した場合、元の Provider/Model を優先します。ルート失効、Provider 利用不能、または割り当て差が許容値を超えた場合のみ、通常のロードバランシングにフォールバックします。
+
+## Codex App 設定ツール
+
+`cmd/` には環境別の Codex 設定ツールがあります。
+
+| プラットフォーム／環境 | スクリプト |
+| :--- | :--- |
+| macOS Codex App | `cmd/marsCodexApp.sh` |
+| Windows Codex App | `cmd/marsCodexApp.bat` |
+| Ubuntu Codex CLI／デスクトップ | `cmd/marsCodexApp_Linux_CLI.sh` |
+| VS Code SSH Remote + Codex Extension | `cmd/marsCodexApp_Linux_VSC_Remote.sh` |
+
+ツールでは Mars LLM ソースの適用、Mars 適用前に有効だった Provider 選択への復元（保存値がない場合は Codex 標準設定）、Mars モデルカタログの更新を実行できます。適用時には `MARS_API_KEY`、Responses Provider、Codex の画像生成機能、Mars MCP の `image_gen` ツールも設定されます。
+
+設定は管理対象ブロックとして既存の `config.toml` にマージされます。既存の `[projects."..."]`、プロジェクト信頼設定、機能フラグ、Mars と無関係なセクションは保持されます。`config.toml.mars-llm-proxy.bak` は緊急時用バックアップに限定され、通常の復元では現在の設定へ上書きしません。復元時に削除されるのは Mars が管理する Provider、URL、カタログ、MCP、Token 取得元だけです。既存バックアップを上書きしない選択でも適用処理は継続します。
+
+既存の `[model_providers.*]` と `[profiles.*]` は削除されず、Mars と共存します。適用時にはトップレベルの `model`、`model_provider`、`model_catalog_json`、`profile` を保存し、model／Provider／catalog を Mars に切り替え、競合する可能性があるアクティブ profile を一時的に解除します。以前の値は `config.toml.mars-llm-proxy.defaults` に保存され、Mars の削除時に復元されます。旧版で状態ファイルが存在しない場合は、別の Provider を推測せず Codex 標準設定へ戻します。
+
+ドキュメントのダウンロード URL には `https://example.com/downloads/marsCodexApp.sh` のような例示用 URL のみを使用し、実際の配布 URL は公開しません。適用、復元、更新後は Codex App、CLI、または VS Code Extension Host を完全に再起動してください。
 
 ## ローカル開発
 

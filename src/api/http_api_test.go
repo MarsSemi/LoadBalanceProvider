@@ -1,8 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -18,9 +24,140 @@ import (
 )
 
 // -------------------------------------------------------------------------------------
+func TestCanAccessMCPRouteWithPermanentAPIOrMCPKey(t *testing.T) {
+	_tests := []struct {
+		name       string
+		key        auth.APIKeyView
+		route      string
+		wantAccess bool
+	}{
+		{name: "api key can call MCP", key: auth.APIKeyView{KeyType: auth.APIKeyTypeChat}, route: "/mcp/", wantAccess: true},
+		{name: "MCP key can call MCP", key: auth.APIKeyView{KeyType: auth.APIKeyTypeMCP}, route: "/mcp/", wantAccess: true},
+		{name: "temporary login key cannot call MCP", key: auth.APIKeyView{KeyType: auth.APIKeyTypeSession, Temporary: true}, route: "/mcp/", wantAccess: false},
+		{name: "MCP key cannot call general API", key: auth.APIKeyView{KeyType: auth.APIKeyTypeMCP}, route: "/v1/chat/completions", wantAccess: false},
+	}
+	for _, _test := range _tests {
+		t.Run(_test.name, func(t *testing.T) {
+			if _got := canAccessRoute(_test.key, false, http.MethodPost, _test.route); _got != _test.wantAccess {
+				t.Fatalf("canAccessRoute() = %v, want %v", _got, _test.wantAccess)
+			}
+		})
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestImageGenerateMCPToolDefaultsToBase64Result(t *testing.T) {
+	for _, _spec := range mcpToolSpecs() {
+		if _spec.Definition.Name != "image_gen" {
+			continue
+		}
+		if _spec.Route.Path != "/v1/images/generations" || !_spec.Route.BodyFromArguments {
+			t.Fatalf("image_gen route = %#v", _spec.Route)
+		}
+		if _spec.Route.BodyDefaults["response_format"] != "b64_json" {
+			t.Fatalf("image_gen response_format default = %#v", _spec.Route.BodyDefaults["response_format"])
+		}
+		if _spec.Route.BodyForcedValues["response_format"] != "b64_json" {
+			t.Fatalf("image_gen response_format forced value = %#v", _spec.Route.BodyForcedValues["response_format"])
+		}
+		if !_spec.Route.RichContent {
+			t.Fatal("image_gen route must be declared as rich content")
+		}
+		if _spec.Definition.OutputSchema != nil {
+			t.Fatalf("image_gen must not declare the HTTP output schema: %#v", _spec.Definition.OutputSchema)
+		}
+		return
+	}
+	t.Fatal("image_gen MCP tool was not registered")
+}
+
+// -------------------------------------------------------------------------------------
+func TestMCPGeneratedImageContentCompactsLargePNG(t *testing.T) {
+	_source := image.NewRGBA(image.Rect(0, 0, 640, 640))
+	_seed := uint32(0x9e3779b9)
+	_nextByte := func() uint8 {
+		_seed ^= _seed << 13
+		_seed ^= _seed >> 17
+		_seed ^= _seed << 5
+		return uint8(_seed)
+	}
+	for _y := 0; _y < 640; _y++ {
+		for _x := 0; _x < 640; _x++ {
+			_source.SetRGBA(_x, _y, color.RGBA{
+				R: _nextByte(),
+				G: _nextByte(),
+				B: _nextByte(),
+				A: 255,
+			})
+		}
+	}
+	var _png bytes.Buffer
+	if _err := png.Encode(&_png, _source); _err != nil {
+		t.Fatal(_err)
+	}
+	if _png.Len() <= mcpImagePreviewTotalMaxBytes {
+		t.Fatalf("test PNG is too small: %d bytes", _png.Len())
+	}
+
+	_content, _sanitized, _ok := mcpGeneratedImageContent(map[string]interface{}{
+		"data": []interface{}{map[string]interface{}{"b64_json": base64.StdEncoding.EncodeToString(_png.Bytes())}},
+	})
+	if !_ok || len(_content) != 1 {
+		t.Fatalf("image content = %#v, sanitized = %#v", _content, _sanitized)
+	}
+	_encoded, _ := _content[0]["data"].(string)
+	_preview, _err := base64.StdEncoding.DecodeString(_encoded)
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if len(_preview) > mcpImagePreviewTotalMaxBytes {
+		t.Fatalf("preview size = %d, limit = %d", len(_preview), mcpImagePreviewTotalMaxBytes)
+	}
+	if _content[0]["mimeType"] != "image/jpeg" {
+		t.Fatalf("preview MIME = %#v", _content[0]["mimeType"])
+	}
+	if _, _, _err := image.Decode(bytes.NewReader(_preview)); _err != nil {
+		t.Fatalf("preview cannot be decoded: %v", _err)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestMCPImageResultDoesNotExposeCompetingStructuredContent(t *testing.T) {
+	_source := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	_source.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
+	var _png bytes.Buffer
+	if _err := png.Encode(&_png, _source); _err != nil {
+		t.Fatal(_err)
+	}
+	_body, _err := json.Marshal(map[string]interface{}{
+		"created": 1,
+		"data": []interface{}{
+			map[string]interface{}{"b64_json": base64.StdEncoding.EncodeToString(_png.Bytes())},
+		},
+	})
+	if _err != nil {
+		t.Fatal(_err)
+	}
+
+	_result := mcpToolResultFromHTTP(http.StatusOK, http.Header{"Content-Type": []string{"application/json"}}, _body)
+	_content, _ok := _result["content"].([]map[string]interface{})
+	if !_ok || len(_content) != 1 || _content[0]["type"] != "image" {
+		t.Fatalf("MCP image content = %#v", _result["content"])
+	}
+	if _, _exists := _result["structuredContent"]; _exists {
+		t.Fatalf("rich media result must not include structuredContent: %#v", _result)
+	}
+	_meta, _ := _content[0]["_meta"].(map[string]interface{})
+	if _meta["codex/imageDetail"] != "original" {
+		t.Fatalf("MCP image content is missing Codex image metadata: %#v", _content[0])
+	}
+}
+
+// -------------------------------------------------------------------------------------
 func TestAPIKeyRoutingPolicyOverridesChatRequest(t *testing.T) {
 	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType:         auth.APIKeyTypeChat,
 		ProviderID:      "provider-2",
 		Model:           "model-2",
 		ReasoningEffort: "medium",
@@ -43,6 +180,7 @@ func TestAPIKeyRoutingPolicyOverridesChatRequest(t *testing.T) {
 func TestAPIKeyAutoRoutingPolicyPreservesCallerOverrides(t *testing.T) {
 	_request := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType:         auth.APIKeyTypeChat,
 		ProviderID:      "AUTO",
 		Model:           "AUTO",
 		ReasoningEffort: "AUTO",
@@ -75,6 +213,7 @@ func TestAPIKeyAutoRoutingPolicyPreservesCallerOverrides(t *testing.T) {
 func TestAPIKeyRoutingPolicyPinsProviderButKeepsCallerModel(t *testing.T) {
 	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType:         auth.APIKeyTypeChat,
 		ProviderID:      "provider-2",
 		Model:           "AUTO",
 		ReasoningEffort: "AUTO",
@@ -131,6 +270,7 @@ func TestPinnedRoutingUnavailableReasonExplainsDisabledProvider(t *testing.T) {
 	_pinned := func(_providerID string, _model string) *http.Request {
 		_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 		return _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+			KeyType:    auth.APIKeyTypeChat,
 			ProviderID: _providerID, Model: _model, ReasoningEffort: "AUTO",
 		}))
 	}
@@ -150,6 +290,7 @@ func TestPinnedRoutingUnavailableReasonExplainsDisabledProvider(t *testing.T) {
 func TestAutoRoutingPolicyLeavesBodyByteIdentical(t *testing.T) {
 	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType:    auth.APIKeyTypeChat,
 		ProviderID: "AUTO", Model: "AUTO", ReasoningEffort: "AUTO",
 	}))
 
@@ -176,6 +317,7 @@ func TestAutoRoutingPolicyLeavesBodyByteIdentical(t *testing.T) {
 func TestRoutingPolicyRewritePreservesLargeIntegers(t *testing.T) {
 	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType:    auth.APIKeyTypeChat,
 		ProviderID: "provider-2", Model: "AUTO", ReasoningEffort: "AUTO",
 	}))
 
@@ -1058,5 +1200,97 @@ func TestProviderCapacityCooldownIsConfigurable(t *testing.T) {
 	}
 	if _got := _handler.providerCapacityCooldown(); _got != 3*time.Second {
 		t.Fatalf("cooldown after rejected save = %s, want 3s preserved", _got)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 重試用盡時必須用「正常完成」的串流訊息收尾，而不是 502 ——
+// 502 會讓客戶端判定串流中斷並顯示「正在重新連線」。
+func TestExhaustedRetriesEndWithGracefulTerminalNot502(t *testing.T) {
+	_handler := &HTTPAPI{}
+	_recorder := httptest.NewRecorder()
+	_deferred := newDeferredResponseWriter(_recorder, true)
+
+	// 模擬上游先回了 500 並寫入部分內容，但都還沒送出給客戶端。
+	_deferred.WriteHeader(http.StatusInternalServerError)
+	_, _ = _deferred.Write([]byte(`{"error":"boom"}`))
+
+	_ok := _handler.writeGracefulStreamTerminal(_recorder, _deferred, true,
+		proxy.ResponsesRefusalTerminal, errors.New("An error occurred while processing your request."))
+	if !_ok {
+		t.Fatal("graceful terminal should be written when nothing was committed")
+	}
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (a 502 would trigger a client reconnect)", _recorder.Code)
+	}
+	_body := _recorder.Body.String()
+	if !strings.Contains(_body, "response.completed") {
+		t.Fatalf("expected a completed stream, got %q", _body)
+	}
+	if !strings.Contains(_body, "An error occurred while processing your request.") {
+		t.Fatalf("reason should be surfaced, got %q", _body)
+	}
+	if strings.Contains(_body, `{"error":"boom"}`) {
+		t.Fatalf("the discarded attempt must not leak into the response: %q", _body)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 已經送出內容後不得再改寫收尾。
+func TestGracefulStreamTerminalSkippedAfterCommit(t *testing.T) {
+	_handler := &HTTPAPI{}
+	_recorder := httptest.NewRecorder()
+	_deferred := newDeferredResponseWriter(_recorder, true)
+	_deferred.WriteHeader(http.StatusOK)
+	_, _ = _deferred.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+	_ = _deferred.Commit()
+
+	if _handler.writeGracefulStreamTerminal(_recorder, _deferred, true, proxy.ResponsesRefusalTerminal, errors.New("boom")) {
+		t.Fatal("must not rewrite a response that was already sent")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 格式由上游決定，代理負責轉碼：不可渲染的格式（例如 WebP）必須被轉成
+// 客戶端顯示得出來的格式，而不是原樣送出讓客戶端印一整包 base64 JSON。
+func TestCompactMCPImageTranscodesUnrenderableFormat(t *testing.T) {
+	_source := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	for _y := 0; _y < 32; _y++ {
+		for _x := 0; _x < 32; _x++ {
+			_source.SetRGBA(_x, _y, color.RGBA{R: uint8(_x * 8), G: uint8(_y * 8), B: 128, A: 255})
+		}
+	}
+	var _encoded bytes.Buffer
+	if _err := png.Encode(&_encoded, _source); _err != nil {
+		t.Fatal(_err)
+	}
+
+	// 內容可解碼，但宣告成客戶端渲染不出來的 mimeType。
+	_bytes, _mime, _ := compactMCPImage(_encoded.Bytes(), "image/webp", mcpImagePreviewTotalMaxBytes)
+	if _mime != "image/png" {
+		t.Fatalf("mime = %q, want image/png after transcoding", _mime)
+	}
+	if _, _, _err := image.Decode(bytes.NewReader(_bytes)); _err != nil {
+		t.Fatalf("transcoded image cannot be decoded: %v", _err)
+	}
+
+	// 已經可渲染且在預算內的影像不得被重新編碼。
+	_same, _sameMIME, _isPreview := compactMCPImage(_encoded.Bytes(), "image/png", mcpImagePreviewTotalMaxBytes)
+	if _sameMIME != "image/png" || _isPreview || !bytes.Equal(_same, _encoded.Bytes()) {
+		t.Fatalf("renderable image should pass through untouched: mime=%q preview=%v", _sameMIME, _isPreview)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestRenderableMCPImageMIMEClassification(t *testing.T) {
+	for _, _mime := range []string{"image/png", "image/jpeg", "image/JPG", "image/gif"} {
+		if !isRenderableMCPImageMIME(_mime) {
+			t.Fatalf("%s should be renderable", _mime)
+		}
+	}
+	for _, _mime := range []string{"image/webp", "image/avif", "image/heic", ""} {
+		if isRenderableMCPImageMIME(_mime) {
+			t.Fatalf("%s must not be treated as renderable", _mime)
+		}
 	}
 }

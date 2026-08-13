@@ -275,6 +275,10 @@ func (_c *Client) ForwardChatCompletion(_ctx context.Context, _w http.ResponseWr
 
 // -------------------------------------------------------------------------------------
 func (_c *Client) ForwardMultimodal(_ctx context.Context, _w http.ResponseWriter, _srcReq *http.Request, _provider *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _targetURL string, _rawBody []byte, _stream bool, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) error {
+	if isOpenAICodexProvider(_provider) && isOpenAIImageGenerationRoute(_srcReq) {
+		return _c.forwardOpenAICodexImageGeneration(_ctx, _w, _srcReq, _provider, _model, _rawBody, _profile, _selectionMeta)
+	}
+
 	_body, _contentType, _err := rewriteMultimodalRequestBody(_rawBody, _srcReq.Header.Get("Content-Type"), _model.Name)
 	if _err != nil {
 		return _err
@@ -1551,7 +1555,8 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 			_body := _event.Body
 			_responseSnapshot.consumeEvent(_body)
 			if _event.TerminalError != "" && _refusalTerminal != nil && _writerMetrics.ClientContentItems == 0 &&
-				(_event.RetryableCapacity || providerErrorTextIsAuthentication(_event.TerminalError)) {
+				(_event.RetryableCapacity || providerErrorTextIsAuthentication(_event.TerminalError) ||
+					providerErrorTextIsRetryableUpstreamFailure(_event.TerminalError)) {
 				_resultValue := <-_result
 				_resultValue.Metrics.mergeClientDelivery(_writerMetrics)
 				_resultValue.Metrics.finalizeClientDelivery()
@@ -1723,6 +1728,14 @@ func gracefulRefusalMessage(_reason string) string {
 	return "⚠️ Upstream provider rejected or could not complete this request:\n\n" + _reason
 }
 
+// ChatRefusalTerminal 供 API 層在重試用盡後，用一則正常完成的訊息收尾。
+func ChatRefusalTerminal(_reason string) []byte { return chatRefusalTerminal(_reason) }
+
+// -------------------------------------------------------------------------------------
+// ResponsesRefusalTerminal 供 API 層在重試用盡後，用一則正常完成的訊息收尾。
+func ResponsesRefusalTerminal(_reason string) []byte { return responsesRefusalTerminal(_reason) }
+
+// -------------------------------------------------------------------------------------
 // chatRefusalTerminal builds a complete chat.completion stream that delivers the refusal text
 // and finishes with finish_reason=stop, so the client renders it and does NOT retry (instead of
 // an ambiguous error the client would spin on).
@@ -2524,6 +2537,31 @@ func providerErrorTextIsAuthentication(_text string) bool {
 }
 
 // -------------------------------------------------------------------------------------
+// providerErrorTextIsRetryableUpstreamFailure 辨識上游「暫時性、可重試」的一般性錯誤。
+// OpenAI 這類回應本身就寫著 "You can retry your request"，而且不帶任何可判讀的原因，
+// 與內容政策拒絕完全不同 —— 重試（通常是同一個帳號）多半就會成功，
+// 不該直接把錯誤訊息丟給使用者。
+func providerErrorTextIsRetryableUpstreamFailure(_text string) bool {
+	_text = strings.ToLower(strings.TrimSpace(_text))
+	if _text == "" || providerErrorTextIsRequestRejection(_text) {
+		return false
+	}
+	for _, _pattern := range []string{
+		"you can retry your request",
+		"an error occurred while processing your request",
+		"internal server error",
+		"internal_error",
+		"server_error",
+		"please try again",
+	} {
+		if strings.Contains(_text, _pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// -------------------------------------------------------------------------------------
 func providerErrorTextIsRequestRejection(_text string) bool {
 	_text = strings.ToLower(strings.TrimSpace(_text))
 	for _, _pattern := range []string{
@@ -2811,8 +2849,11 @@ func (_m ChatMetrics) TokenGenerationSpeed(_fallback time.Duration) float64 {
 	// 一律以代理牆鐘為準，與輸出速度同一時鐘。
 	_generationMS := _m.wallClockGenerationWindowMS()
 	_fallbackMS := durationMilliseconds(_fallback)
-	// 極短的窗多半是上游一次沖出整段回應，量到的是 socket flush 而非生成速率。
-	if _generationMS <= 0 || (!_m.ProviderTiming && _generationMS < minimumReliableStreamMetricWindowMS && _fallbackMS > _generationMS) {
+	// 極短的窗多半是上游思考很久、最後一次沖出整段回應，量到的是 socket flush
+	// 而非生成速率。這個判斷與 provider 有沒有自報時間無關 —— 我們量的是牆鐘，
+	// 先前保留 ProviderTiming 豁免是舊設計（窗取自 provider 自報時間）的遺留，
+	// 會讓這類請求算出上千 tok/s 的荒謬數字。
+	if _generationMS <= 0 || (_generationMS < minimumReliableStreamMetricWindowMS && _fallbackMS > _generationMS) {
 		_generationMS = _fallbackMS
 	}
 	if _generationMS > 0 {

@@ -106,7 +106,7 @@ http://<host>:<port>/mcp/
 
 MCP is enabled by default and uses protocol version `2025-11-25`. It supports `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `tools/call`. The endpoint does not maintain server-initiated SSE, so `GET /mcp/` returns `405 Method Not Allowed` as required; each JSON-RPC message uses a separate HTTP `POST`.
 
-Before connecting, issue a dedicated MCP key from **Key Management > MCP Keys** in the management interface and authenticate with that key:
+Authenticate with either an API key or a dedicated MCP key issued from **Key Management** in the management interface:
 
 ```http
 POST /mcp/ HTTP/1.1
@@ -117,7 +117,7 @@ Accept: application/json, text/event-stream
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example","version":"1.0.0"}}}
 ```
 
-Chat API keys and temporary web login keys cannot call MCP. MCP keys cannot call Chat, Responses, or other general REST APIs. Accumulated and monthly usage statistics are not collected for MCP keys.
+API keys can call general REST APIs and MCP. Temporary web login keys cannot call MCP. MCP keys can only call MCP, cannot call Chat, Responses, or other general REST APIs, and do not collect accumulated or monthly usage statistics.
 
 The management interface under **Settings > MCP** allows you to:
 
@@ -166,6 +166,25 @@ The default strategy is currently `random`:
 3. The strategy layer generates selection metadata. Response headers include `X-Proxy-Strategy`, `X-Proxy-Provider`, `X-Proxy-Model`, and related values.
 4. A `weighted_score` strategy implementation is retained for future cost, latency, capability classification, health, and other policies.
 5. When a later Responses request matches an affinity route through `previous_response_id` or `prompt_cache_key`, the original provider and model are preferred. The service falls back to normal load balancing only when the route expires, the provider is unavailable, or the quota difference exceeds the configured tolerance.
+
+## Codex App Setup Tools
+
+The `cmd/` directory provides platform-specific Codex setup tools:
+
+| Platform / environment | Script |
+| :--- | :--- |
+| macOS Codex App | `cmd/marsCodexApp.sh` |
+| Windows Codex App | `cmd/marsCodexApp.bat` |
+| Ubuntu Codex CLI / desktop | `cmd/marsCodexApp_Linux_CLI.sh` |
+| VS Code SSH Remote + Codex Extension | `cmd/marsCodexApp_Linux_VSC_Remote.sh` |
+
+The tools can apply the Mars LLM source, restore the provider selection that was active before Mars (or native Codex defaults when none was saved), or refresh the Mars model catalog. Applying the source also configures `MARS_API_KEY`, the Responses provider, Codex image generation, and the Mars MCP `image_gen` tool.
+
+Configuration is merged into the existing `config.toml` through a managed block. Existing `[projects."..."]` entries, project trust settings, feature flags, and unrelated sections are preserved. The generated `config.toml.mars-llm-proxy.bak` file is only an emergency backup; the normal restore operation does not overwrite the current configuration with it. Restore removes only Mars-managed provider, URL, catalog, MCP, and token-source settings. Keeping an existing backup instead of overwriting it does not stop the apply operation.
+
+Existing `[model_providers.*]` and `[profiles.*]` definitions coexist with Mars and are never removed. Applying Mars saves the active top-level `model`, `model_provider`, `model_catalog_json`, and `profile`, switches the model/provider/catalog to Mars, and clears a potentially conflicting active profile. The previous values are stored in `config.toml.mars-llm-proxy.defaults` and restored when Mars is removed. If an older Mars installation has no state file, restore falls back to native Codex defaults instead of guessing another provider.
+
+Documentation download URLs must use placeholders such as `https://example.com/downloads/marsCodexApp.sh`; the actual script distribution URL is intentionally not published. After applying, restoring, or refreshing, fully restart Codex App, the CLI, or the VS Code Extension Host so that environment variables, account state, and the model catalog are reloaded.
 
 ## Local Development
 

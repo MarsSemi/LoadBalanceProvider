@@ -106,7 +106,7 @@ http://<host>:<port>/mcp/
 
 MCP는 기본적으로 활성화되며 프로토콜 버전은 `2025-11-25`입니다. `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`을 지원합니다. 엔드포인트는 서버 주도 SSE 연결을 유지하지 않으므로 규격에 따라 `GET /mcp/`는 `405 Method Not Allowed`를 반환하며, 각 JSON-RPC 메시지는 별도의 HTTP `POST`를 사용합니다.
 
-연결하기 전에 관리 화면의 **키 관리 > MCP 키**에서 MCP 전용 키를 발급하고 해당 키로 인증하십시오.
+관리 화면의 **키 관리**에서 발급한 API 키 또는 MCP 전용 키로 인증할 수 있습니다.
 
 ```http
 POST /mcp/ HTTP/1.1
@@ -117,7 +117,7 @@ Accept: application/json, text/event-stream
 {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"example","version":"1.0.0"}}}
 ```
 
-Chat API Key와 임시 Web 로그인 키는 MCP를 호출할 수 없습니다. MCP 키도 Chat, Responses 또는 기타 일반 REST API를 호출할 수 없습니다. MCP 키의 누적 및 월별 사용 통계는 수집하지 않습니다.
+API Key는 일반 REST API와 MCP를 호출할 수 있습니다. 임시 Web 로그인 키는 MCP를 호출할 수 없습니다. MCP 키는 MCP만 호출할 수 있고 Chat, Responses 또는 기타 일반 REST API는 호출할 수 없으며 누적 및 월별 사용 통계도 수집하지 않습니다.
 
 관리 화면의 **설정 > MCP**에서 다음 항목을 조정할 수 있습니다.
 
@@ -166,6 +166,25 @@ Provider 및 알림 대상 URL은 `http`와 `https`만 허용합니다. link-loc
 3. 전략 계층은 selection meta를 생성하며, 응답 Header에 `X-Proxy-Strategy`, `X-Proxy-Provider`, `X-Proxy-Model` 등의 정보를 포함합니다.
 4. 향후 비용, 지연 시간, 기능 분류, 상태 등의 정책을 추가할 수 있도록 `weighted_score` 전략 구현을 유지합니다.
 5. Responses 후속 요청이 `previous_response_id` 또는 `prompt_cache_key` 고정 라우트와 일치하면 원래 Provider/Model을 우선 사용합니다. 라우트 만료, Provider 사용 불가 또는 할당량 차이가 허용치를 초과한 경우에만 일반 부하 분산으로 전환합니다.
+
+## Codex App 설정 도구
+
+`cmd/` 디렉터리는 환경별 Codex 설정 도구를 제공합니다.
+
+| 플랫폼 / 환경 | 스크립트 |
+| :--- | :--- |
+| macOS Codex App | `cmd/marsCodexApp.sh` |
+| Windows Codex App | `cmd/marsCodexApp.bat` |
+| Ubuntu Codex CLI / 데스크톱 | `cmd/marsCodexApp_Linux_CLI.sh` |
+| VS Code SSH Remote + Codex Extension | `cmd/marsCodexApp_Linux_VSC_Remote.sh` |
+
+도구에서 Mars LLM 소스 적용, Mars 적용 전에 사용하던 Provider 선택 복원(저장값이 없으면 Codex 기본 설정), Mars 모델 카탈로그 갱신을 수행할 수 있습니다. 적용 시 `MARS_API_KEY`, Responses Provider, Codex 이미지 생성 기능 및 Mars MCP `image_gen` 도구도 함께 설정됩니다.
+
+설정은 관리 블록으로 기존 `config.toml`에 병합됩니다. 기존 `[projects."..."]`, 프로젝트 신뢰 설정, 기능 플래그 및 Mars와 관련 없는 섹션은 유지됩니다. 생성되는 `config.toml.mars-llm-proxy.bak`는 비상 복구용일 뿐이며 정상 복원 작업에서는 현재 설정을 이 파일로 덮어쓰지 않습니다. 복원 시 Mars가 관리하는 Provider, URL, 카탈로그, MCP 및 Token 소스만 제거됩니다. 기존 백업을 덮어쓰지 않도록 선택해도 적용 작업은 계속됩니다.
+
+기존 `[model_providers.*]`와 `[profiles.*]` 정의는 삭제되지 않고 Mars와 함께 유지됩니다. 적용 시 최상위 `model`, `model_provider`, `model_catalog_json`, `profile`을 저장한 뒤 model/Provider/catalog를 Mars로 전환하고 충돌할 수 있는 활성 profile은 일시적으로 해제합니다. 이전 값은 `config.toml.mars-llm-proxy.defaults`에 저장되며 Mars 제거 시 복원됩니다. 이전 버전에서 상태 파일이 없으면 다른 Provider를 추측하지 않고 Codex 기본 설정으로 돌아갑니다.
+
+문서의 다운로드 URL에는 `https://example.com/downloads/marsCodexApp.sh` 같은 예시 주소만 사용하며 실제 배포 URL은 공개하지 않습니다. 적용, 복원 또는 갱신 후에는 Codex App, CLI 또는 VS Code Extension Host를 완전히 다시 시작하십시오.
 
 ## 로컬 개발
 
