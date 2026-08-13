@@ -169,14 +169,14 @@ The default strategy is currently `random`:
 
 ## Codex App Setup Tools
 
-The `cmd/` directory provides platform-specific Codex setup tools:
+The following are example names for platform-specific Codex setup tools. They are not included in the deployment ZIP and must be distributed through a separately managed channel:
 
 | Platform / environment | Script |
 | :--- | :--- |
-| macOS Codex App | `cmd/marsCodexApp.sh` |
-| Windows Codex App | `cmd/marsCodexApp.bat` |
-| Ubuntu Codex CLI / desktop | `cmd/marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `cmd/marsCodexApp_Linux_VSC_Remote.sh` |
+| macOS Codex App | `marsCodexApp.sh` |
+| Windows Codex App | `marsCodexApp.bat` |
+| Ubuntu Codex CLI / desktop | `marsCodexApp_Linux_CLI.sh` |
+| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
 
 The tools can apply the Mars LLM source, restore the provider selection that was active before Mars (or native Codex defaults when none was saved), or refresh the Mars model catalog. Applying the source also configures `MARS_API_KEY`, the Responses provider, Codex image generation, and the Mars MCP `image_gen` tool.
 

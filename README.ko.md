@@ -169,14 +169,14 @@ Provider 및 알림 대상 URL은 `http`와 `https`만 허용합니다. link-loc
 
 ## Codex App 설정 도구
 
-`cmd/` 디렉터리는 환경별 Codex 설정 도구를 제공합니다.
+아래 항목은 환경별 Codex 설정 도구의 예시 파일명입니다. 해당 스크립트는 배포 ZIP에 포함하지 않으며 별도로 관리되는 배포 경로에서 제공합니다.
 
 | 플랫폼 / 환경 | 스크립트 |
 | :--- | :--- |
-| macOS Codex App | `cmd/marsCodexApp.sh` |
-| Windows Codex App | `cmd/marsCodexApp.bat` |
-| Ubuntu Codex CLI / 데스크톱 | `cmd/marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `cmd/marsCodexApp_Linux_VSC_Remote.sh` |
+| macOS Codex App | `marsCodexApp.sh` |
+| Windows Codex App | `marsCodexApp.bat` |
+| Ubuntu Codex CLI / 데스크톱 | `marsCodexApp_Linux_CLI.sh` |
+| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
 
 도구에서 Mars LLM 소스 적용, Mars 적용 전에 사용하던 Provider 선택 복원(저장값이 없으면 Codex 기본 설정), Mars 모델 카탈로그 갱신을 수행할 수 있습니다. 적용 시 `MARS_API_KEY`, Responses Provider, Codex 이미지 생성 기능 및 Mars MCP `image_gen` 도구도 함께 설정됩니다.
 

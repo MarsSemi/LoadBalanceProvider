@@ -8,7 +8,7 @@
 - `bin/LoadBalanceProvider_linux_x64`：Linux x86_64 / amd64。
 - `bin/LoadBalanceProvider_linux_arm64`：Linux arm64 / aarch64。
 
-部署 zip 也包含 `cmd/` 下四個 Codex App／CLI 設定腳本；封裝只收錄正式腳本，不會包含開發期間的 `.bak` 檔案。
+部署 zip 不包含 `cmd/` 下的 Codex App／CLI 設定腳本。相關腳本僅在說明文件以範例名稱與範例下載網址呈現，應由實際管理的發佈管道另行提供。
 
 正式執行檔不直接放在根目錄，需透過 `install.sh` 依照目前 OS 與 CPU 架構複製。
 
@@ -86,12 +86,12 @@ agent.sample.properties -> agent.properties
 
 ## Codex App 用戶端設定
 
-原始碼的 `cmd/` 目錄包含 Codex App／CLI 設定工具：
+以下僅為 Codex App／CLI 設定工具的範例檔名，不代表部署 ZIP 內含這些檔案：
 
-- macOS：`cmd/marsCodexApp.sh`
-- Windows：`cmd/marsCodexApp.bat`
-- Ubuntu CLI／桌面環境：`cmd/marsCodexApp_Linux_CLI.sh`
-- VS Code SSH Remote：`cmd/marsCodexApp_Linux_VSC_Remote.sh`
+- macOS：`marsCodexApp.sh`
+- Windows：`marsCodexApp.bat`
+- Ubuntu CLI／桌面環境：`marsCodexApp_Linux_CLI.sh`
+- VS Code SSH Remote：`marsCodexApp_Linux_VSC_Remote.sh`
 
 若從下載站取得腳本，文件中的網址一律是範例，請替換成實際的內部發佈位置：
 
