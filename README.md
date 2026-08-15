@@ -172,6 +172,32 @@ Provider 與通知目標 URL 只允許 `http`/`https`，並阻擋 link-local、u
 
 設定變更會以增量方式合併至既有的 `config.toml`，並保留專案信任資訊、功能旗標及其他不相關設定。套用前會保存必要狀態，以便需要時還原原先的 Provider、Profile 與模型選擇。
 
+以下為設定整合的格式範例；實際的服務位址、驗證資訊與檔案路徑會依部署環境調整：
+
+```toml
+# BEGIN Mars LLM Proxy managed settings
+model = "AUTO"
+model_catalog_json = "<codex-home>/mars-model-catalog.json"
+model_provider = "mars-llm-proxy"
+# END Mars LLM Proxy managed settings
+
+[model_providers.mars-llm-proxy]
+name = "Mars"
+base_url = "https://proxy.example.com/v1"
+env_key = "MARS_API_KEY"
+wire_api = "responses"
+requires_openai_auth = true
+
+[features]
+image_generation = true
+
+[mcp_servers.mars-llm-proxy]
+url = "https://proxy.example.com/mcp/"
+bearer_token_env_var = "MARS_API_KEY"
+enabled_tools = ["image_gen"]
+tool_timeout_sec = 600
+```
+
 完成套用、還原或更新後，請完整重新啟動 Codex App、CLI 或 VS Code Extension Host，使新的設定與帳號狀態重新載入。
 
 ## 本地開發
