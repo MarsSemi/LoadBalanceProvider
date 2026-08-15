@@ -167,17 +167,13 @@ The default strategy is currently `random`:
 4. A `weighted_score` strategy implementation is retained for future cost, latency, capability classification, health, and other policies.
 5. When a later Responses request matches an affinity route through `previous_response_id` or `prompt_cache_key`, the original provider and model are preferred. The service falls back to normal load balancing only when the route expires, the provider is unavailable, or the quota difference exceeds the configured tolerance.
 
-## Codex App Setup Tools
+## Codex Configuration Integration
 
-Setup tools are provided separately for each environment. They are not included in the deployment ZIP and must be obtained through a separately managed distribution channel.
+Configuration integration helps manage model sources, providers, model catalogs, and related extensions. Available capabilities may vary by environment, deployment method, and granted permissions.
 
-The tools can apply the Mars LLM source, restore the provider selection that was active before Mars (or native Codex defaults when none was saved), or refresh the Mars model catalog. Applying the source also configures `MARS_API_KEY`, the Responses provider, Codex image generation, and the Mars MCP `image_gen` tool.
+Changes are merged incrementally into the existing `config.toml` while preserving project trust entries, feature flags, and unrelated settings. Required state is retained before changes are applied so that the previous provider, profile, and model selection can be restored when needed.
 
-Configuration is merged into the existing `config.toml` through a managed block. Existing `[projects."..."]` entries, project trust settings, feature flags, and unrelated sections are preserved. The generated `config.toml.mars-llm-proxy.bak` file is only an emergency backup; the normal restore operation does not overwrite the current configuration with it. Restore removes only Mars-managed provider, URL, catalog, MCP, and token-source settings. Keeping an existing backup instead of overwriting it does not stop the apply operation.
-
-Existing `[model_providers.*]` and `[profiles.*]` definitions coexist with Mars and are never removed. Applying Mars saves the active top-level `model`, `model_provider`, `model_catalog_json`, and `profile`, switches the model/provider/catalog to Mars, and clears a potentially conflicting active profile. The previous values are stored in `config.toml.mars-llm-proxy.defaults` and restored when Mars is removed. If an older Mars installation has no state file, restore falls back to native Codex defaults instead of guessing another provider.
-
-After applying, restoring, or refreshing, fully restart Codex App, the CLI, or the VS Code Extension Host so that environment variables, account state, and the model catalog are reloaded.
+After applying, restoring, or refreshing the configuration, fully restart Codex App, the CLI, or the VS Code Extension Host to reload the updated settings and account state.
 
 ## Local Development
 

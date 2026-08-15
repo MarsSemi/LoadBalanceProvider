@@ -166,59 +166,13 @@ Provider 與通知目標 URL 只允許 `http`/`https`，並阻擋 link-local、u
 4. 保留 `weighted_score` 策略實作，後續可加入成本、延遲、能力分類、健康度等策略。
 5. Responses 後續請求若命中 `previous_response_id` 或 `prompt_cache_key` 黏著路由，會優先使用原 Provider/Model；僅在路由失效、Provider 不可用或配額差距超過容忍值時才降級回一般負載平衡。
 
-## Codex App 設定工具
+## Codex 設定整合
 
-設定工具會依執行環境個別提供，不會封裝於部署 ZIP，應透過另行管理的發佈管道取得。
+設定整合功能可協助管理模型來源、Provider、模型目錄及相關擴充功能。實際支援項目會依執行環境、部署方式與可用權限而有所不同。
 
-工具提供三項操作：
+設定變更會以增量方式合併至既有的 `config.toml`，並保留專案信任資訊、功能旗標及其他不相關設定。套用前會保存必要狀態，以便需要時還原原先的 Provider、Profile 與模型選擇。
 
-1. **套用 Mars LLM 來源**：下載 Mars Codex model catalog、設定 `MARS_API_KEY`、加入 Mars Responses Provider，並設定 `image_generation` 與 MCP `image_gen` 工具。
-2. **恢復 Codex 原始設定**：移除 Mars 管理的 Provider、URL、model catalog 與 Token 來源；若套用前已有作用中的 Provider／Profile，會還原原值，否則回到 Codex 官方登入及原生 Provider 流程。
-3. **更新 Mars 模型列表**：重新下載 model catalog，並同步補齊 Provider 驗證、影像生成與 MCP 設定。
-
-腳本會以受管區塊合併 `config.toml`，不會覆蓋整份設定。既有的 `[projects."..."]`、專案信任資訊、功能旗標及其他非 Mars 區段會保留。套用前仍會建立：
-
-```text
-config.toml.mars-llm-proxy.bak
-```
-
-`.bak` 只作緊急人工復原用途。選擇「恢復 Codex 原始設定」時不會拿 `.bak` 覆蓋現有檔案；已有備份時，即使選擇不覆蓋備份，套用流程也會繼續。
-
-若原本已設定其他 Provider，該 Provider 的 `[model_providers.*]`、`[profiles.*]` 及相關設定會繼續保留並與 Mars 共存。套用時會保存頂層的作用中 `model`、`model_provider`、`model_catalog_json` 與 `profile`；接著將 model／Provider／catalog 切換到 Mars，並清除可能衝突的作用中 profile。原值會保存於：
-
-```text
-config.toml.mars-llm-proxy.defaults
-```
-
-執行恢復時會先移除 Mars 管理區段，再從此狀態檔還原原本的作用中 Provider／Profile，最後刪除狀態檔。若舊版已經套用 Mars、但沒有狀態檔，恢復時則不猜測其他 Provider，而是回到 Codex 原生預設。
-
-腳本產生的主要設定如下，實際 model catalog 路徑會依使用者目錄動態決定：
-
-```toml
-# BEGIN Mars LLM Proxy managed settings
-model = "AUTO"
-model_catalog_json = "<codex-home>/mars-model-catalog.json"
-model_provider = "mars-llm-proxy"
-# END Mars LLM Proxy managed settings
-
-[model_providers.mars-llm-proxy]
-name = "Mars"
-base_url = "https://proxy.example.com/v1"
-env_key = "MARS_API_KEY"
-wire_api = "responses"
-requires_openai_auth = true
-
-[features]
-image_generation = true
-
-[mcp_servers.mars-llm-proxy]
-url = "https://proxy.example.com/mcp/"
-bearer_token_env_var = "MARS_API_KEY"
-enabled_tools = ["image_gen"]
-tool_timeout_sec = 600
-```
-
-完成套用、恢復或更新後，必須完整關閉並重新啟動 Codex App、CLI 或 VS Code Extension Host，讓環境變數、帳號資訊與模型目錄重新載入。
+完成套用、還原或更新後，請完整重新啟動 Codex App、CLI 或 VS Code Extension Host，使新的設定與帳號狀態重新載入。
 
 ## 本地開發
 

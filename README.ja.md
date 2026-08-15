@@ -167,17 +167,13 @@ Provider と通知先 URL は `http` と `https` のみ許可します。link-lo
 4. 将来のコスト、遅延、能力分類、健全性などの戦略向けに `weighted_score` 実装を保持しています。
 5. Responses の後続リクエストが `previous_response_id` または `prompt_cache_key` のアフィニティルートに一致した場合、元の Provider/Model を優先します。ルート失効、Provider 利用不能、または割り当て差が許容値を超えた場合のみ、通常のロードバランシングにフォールバックします。
 
-## Codex App 設定ツール
+## Codex 設定統合
 
-設定ツールは環境ごとに個別提供されます。デプロイ ZIP には含めず、別途管理された配布経路から取得してください。
+設定統合機能は、モデルソース、Provider、モデルカタログ、および関連する拡張機能の管理を支援します。利用可能な機能は、実行環境、デプロイ方法、付与された権限によって異なります。
 
-ツールでは Mars LLM ソースの適用、Mars 適用前に有効だった Provider 選択への復元（保存値がない場合は Codex 標準設定）、Mars モデルカタログの更新を実行できます。適用時には `MARS_API_KEY`、Responses Provider、Codex の画像生成機能、Mars MCP の `image_gen` ツールも設定されます。
+変更は既存の `config.toml` に増分方式でマージされ、プロジェクト信頼情報、機能フラグ、および無関係な設定は保持されます。必要に応じて以前の Provider、Profile、モデル選択を復元できるよう、適用前に必要な状態を保存します。
 
-設定は管理対象ブロックとして既存の `config.toml` にマージされます。既存の `[projects."..."]`、プロジェクト信頼設定、機能フラグ、Mars と無関係なセクションは保持されます。`config.toml.mars-llm-proxy.bak` は緊急時用バックアップに限定され、通常の復元では現在の設定へ上書きしません。復元時に削除されるのは Mars が管理する Provider、URL、カタログ、MCP、Token 取得元だけです。既存バックアップを上書きしない選択でも適用処理は継続します。
-
-既存の `[model_providers.*]` と `[profiles.*]` は削除されず、Mars と共存します。適用時にはトップレベルの `model`、`model_provider`、`model_catalog_json`、`profile` を保存し、model／Provider／catalog を Mars に切り替え、競合する可能性があるアクティブ profile を一時的に解除します。以前の値は `config.toml.mars-llm-proxy.defaults` に保存され、Mars の削除時に復元されます。旧版で状態ファイルが存在しない場合は、別の Provider を推測せず Codex 標準設定へ戻します。
-
-適用、復元、更新後は Codex App、CLI、または VS Code Extension Host を完全に再起動してください。
+設定の適用、復元、更新後は、Codex App、CLI、または VS Code Extension Host を完全に再起動し、更新された設定とアカウント状態を再読み込みしてください。
 
 ## ローカル開発
 
