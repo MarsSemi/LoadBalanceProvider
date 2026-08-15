@@ -169,14 +169,7 @@ Provider と通知先 URL は `http` と `https` のみ許可します。link-lo
 
 ## Codex App 設定ツール
 
-以下は環境別 Codex 設定ツールの例示用ファイル名です。これらのスクリプトはデプロイ ZIP に含めず、別途管理された配布経路から提供します。
-
-| プラットフォーム／環境 | スクリプト |
-| :--- | :--- |
-| macOS Codex App | `marsCodexApp.sh` |
-| Windows Codex App | `marsCodexApp.bat` |
-| Ubuntu Codex CLI／デスクトップ | `marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
+設定ツールは環境ごとに個別提供されます。デプロイ ZIP には含めず、別途管理された配布経路から取得してください。
 
 ツールでは Mars LLM ソースの適用、Mars 適用前に有効だった Provider 選択への復元（保存値がない場合は Codex 標準設定）、Mars モデルカタログの更新を実行できます。適用時には `MARS_API_KEY`、Responses Provider、Codex の画像生成機能、Mars MCP の `image_gen` ツールも設定されます。
 
@@ -184,7 +177,7 @@ Provider と通知先 URL は `http` と `https` のみ許可します。link-lo
 
 既存の `[model_providers.*]` と `[profiles.*]` は削除されず、Mars と共存します。適用時にはトップレベルの `model`、`model_provider`、`model_catalog_json`、`profile` を保存し、model／Provider／catalog を Mars に切り替え、競合する可能性があるアクティブ profile を一時的に解除します。以前の値は `config.toml.mars-llm-proxy.defaults` に保存され、Mars の削除時に復元されます。旧版で状態ファイルが存在しない場合は、別の Provider を推測せず Codex 標準設定へ戻します。
 
-ドキュメントのダウンロード URL には `https://example.com/downloads/marsCodexApp.sh` のような例示用 URL のみを使用し、実際の配布 URL は公開しません。適用、復元、更新後は Codex App、CLI、または VS Code Extension Host を完全に再起動してください。
+適用、復元、更新後は Codex App、CLI、または VS Code Extension Host を完全に再起動してください。
 
 ## ローカル開発
 

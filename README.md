@@ -168,14 +168,7 @@ Provider 與通知目標 URL 只允許 `http`/`https`，並阻擋 link-local、u
 
 ## Codex App 設定工具
 
-下列項目是依執行環境區分的 Codex 設定工具範例名稱。這些腳本不會封裝於部署 ZIP，應透過另行管理的發佈管道提供：
-
-| 平台／環境 | 腳本 |
-| :--- | :--- |
-| macOS Codex App | `marsCodexApp.sh` |
-| Windows Codex App | `marsCodexApp.bat` |
-| Ubuntu Codex CLI／桌面環境 | `marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
+設定工具會依執行環境個別提供，不會封裝於部署 ZIP，應透過另行管理的發佈管道取得。
 
 工具提供三項操作：
 

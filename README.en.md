@@ -169,14 +169,7 @@ The default strategy is currently `random`:
 
 ## Codex App Setup Tools
 
-The following are example names for platform-specific Codex setup tools. They are not included in the deployment ZIP and must be distributed through a separately managed channel:
-
-| Platform / environment | Script |
-| :--- | :--- |
-| macOS Codex App | `marsCodexApp.sh` |
-| Windows Codex App | `marsCodexApp.bat` |
-| Ubuntu Codex CLI / desktop | `marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
+Setup tools are provided separately for each environment. They are not included in the deployment ZIP and must be obtained through a separately managed distribution channel.
 
 The tools can apply the Mars LLM source, restore the provider selection that was active before Mars (or native Codex defaults when none was saved), or refresh the Mars model catalog. Applying the source also configures `MARS_API_KEY`, the Responses provider, Codex image generation, and the Mars MCP `image_gen` tool.
 
@@ -184,7 +177,7 @@ Configuration is merged into the existing `config.toml` through a managed block.
 
 Existing `[model_providers.*]` and `[profiles.*]` definitions coexist with Mars and are never removed. Applying Mars saves the active top-level `model`, `model_provider`, `model_catalog_json`, and `profile`, switches the model/provider/catalog to Mars, and clears a potentially conflicting active profile. The previous values are stored in `config.toml.mars-llm-proxy.defaults` and restored when Mars is removed. If an older Mars installation has no state file, restore falls back to native Codex defaults instead of guessing another provider.
 
-Documentation download URLs must use placeholders such as `https://example.com/downloads/marsCodexApp.sh`; the actual script distribution URL is intentionally not published. After applying, restoring, or refreshing, fully restart Codex App, the CLI, or the VS Code Extension Host so that environment variables, account state, and the model catalog are reloaded.
+After applying, restoring, or refreshing, fully restart Codex App, the CLI, or the VS Code Extension Host so that environment variables, account state, and the model catalog are reloaded.
 
 ## Local Development
 

@@ -169,14 +169,7 @@ Provider 및 알림 대상 URL은 `http`와 `https`만 허용합니다. link-loc
 
 ## Codex App 설정 도구
 
-아래 항목은 환경별 Codex 설정 도구의 예시 파일명입니다. 해당 스크립트는 배포 ZIP에 포함하지 않으며 별도로 관리되는 배포 경로에서 제공합니다.
-
-| 플랫폼 / 환경 | 스크립트 |
-| :--- | :--- |
-| macOS Codex App | `marsCodexApp.sh` |
-| Windows Codex App | `marsCodexApp.bat` |
-| Ubuntu Codex CLI / 데스크톱 | `marsCodexApp_Linux_CLI.sh` |
-| VS Code SSH Remote + Codex Extension | `marsCodexApp_Linux_VSC_Remote.sh` |
+설정 도구는 환경별로 별도 제공됩니다. 배포 ZIP에는 포함하지 않으며 별도로 관리되는 배포 경로를 통해 받아야 합니다.
 
 도구에서 Mars LLM 소스 적용, Mars 적용 전에 사용하던 Provider 선택 복원(저장값이 없으면 Codex 기본 설정), Mars 모델 카탈로그 갱신을 수행할 수 있습니다. 적용 시 `MARS_API_KEY`, Responses Provider, Codex 이미지 생성 기능 및 Mars MCP `image_gen` 도구도 함께 설정됩니다.
 
@@ -184,7 +177,7 @@ Provider 및 알림 대상 URL은 `http`와 `https`만 허용합니다. link-loc
 
 기존 `[model_providers.*]`와 `[profiles.*]` 정의는 삭제되지 않고 Mars와 함께 유지됩니다. 적용 시 최상위 `model`, `model_provider`, `model_catalog_json`, `profile`을 저장한 뒤 model/Provider/catalog를 Mars로 전환하고 충돌할 수 있는 활성 profile은 일시적으로 해제합니다. 이전 값은 `config.toml.mars-llm-proxy.defaults`에 저장되며 Mars 제거 시 복원됩니다. 이전 버전에서 상태 파일이 없으면 다른 Provider를 추측하지 않고 Codex 기본 설정으로 돌아갑니다.
 
-문서의 다운로드 URL에는 `https://example.com/downloads/marsCodexApp.sh` 같은 예시 주소만 사용하며 실제 배포 URL은 공개하지 않습니다. 적용, 복원 또는 갱신 후에는 Codex App, CLI 또는 VS Code Extension Host를 완전히 다시 시작하십시오.
+적용, 복원 또는 갱신 후에는 Codex App, CLI 또는 VS Code Extension Host를 완전히 다시 시작하십시오.
 
 ## 로컬 개발
 
