@@ -35,19 +35,22 @@ type Recorder struct {
 
 // -------------------------------------------------------------------------------------
 type DayUsage struct {
-	UsedPercent           float64 `json:"used_percent"`
-	RemainingPercent      float64 `json:"remaining_percent"`
-	Observations          int64   `json:"observations"`
-	CurrentRemaining      float64 `json:"current_remaining_percent,omitempty"`
-	CurrentKnown          bool    `json:"current_known,omitempty"`
-	CurrentCapturedAt     string  `json:"current_captured_at,omitempty"`
-	StartRemainingPercent float64 `json:"start_remaining_percent,omitempty"`
-	EndRemainingPercent   float64 `json:"end_remaining_percent,omitempty"`
-	StartKnown            bool    `json:"start_known,omitempty"`
-	EndKnown              bool    `json:"end_known,omitempty"`
-	StartCapturedAt       string  `json:"start_captured_at,omitempty"`
-	EndCapturedAt         string  `json:"end_captured_at,omitempty"`
-	UpdatedAt             string  `json:"updated_at"`
+	UsedPercent            float64 `json:"used_percent"`
+	RemainingPercent       float64 `json:"remaining_percent"`
+	Observations           int64   `json:"observations"`
+	AccumulatedUsedPercent float64 `json:"accumulated_used_percent,omitempty"`
+	AccumulatedKnown       bool    `json:"accumulated_known,omitempty"`
+	QuotaResetCount        int64   `json:"quota_reset_count,omitempty"`
+	CurrentRemaining       float64 `json:"current_remaining_percent,omitempty"`
+	CurrentKnown           bool    `json:"current_known,omitempty"`
+	CurrentCapturedAt      string  `json:"current_captured_at,omitempty"`
+	StartRemainingPercent  float64 `json:"start_remaining_percent,omitempty"`
+	EndRemainingPercent    float64 `json:"end_remaining_percent,omitempty"`
+	StartKnown             bool    `json:"start_known,omitempty"`
+	EndKnown               bool    `json:"end_known,omitempty"`
+	StartCapturedAt        string  `json:"start_captured_at,omitempty"`
+	EndCapturedAt          string  `json:"end_captured_at,omitempty"`
+	UpdatedAt              string  `json:"updated_at"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -98,8 +101,8 @@ func NewRecorder(_root string) *Recorder {
 	}
 }
 
-// Record retains live usage observations for diagnostics. Daily statistics are calculated
-// only from the explicit start and end boundaries captured by RecordDayStart and RecordDayEnd.
+// Record retains live usage observations and accumulates every positive quota drop. Explicit
+// day boundaries establish the calendar-day baseline and mark completed daily statistics.
 // -------------------------------------------------------------------------------------
 func (_r *Recorder) Record(_providerID string, _usedPercent float64, _remainingPercent float64, _at time.Time) error {
 	if _r == nil {
@@ -135,9 +138,7 @@ func (_r *Recorder) Record(_providerID string, _usedPercent float64, _remainingP
 	_dayUsage := _provider.Days[_day]
 	_dayUsage.UsedPercent = _usedPercent
 	_dayUsage.RemainingPercent = _remainingPercent
-	_dayUsage.CurrentRemaining = _remainingPercent
-	_dayUsage.CurrentKnown = true
-	_dayUsage.CurrentCapturedAt = _at.Format(time.RFC3339)
+	recordRemainingObservation(&_dayUsage, _remainingPercent, _at.Format(time.RFC3339))
 	_dayUsage.Observations++
 	_dayUsage.UpdatedAt = time.Now().Format(time.RFC3339)
 	_provider.Days[_day] = _dayUsage
@@ -201,7 +202,16 @@ func (_r *Recorder) recordDayBoundary(_providerID string, _remainingPercent floa
 		_dayUsage.StartRemainingPercent = _remainingPercent
 		_dayUsage.StartKnown = true
 		_dayUsage.StartCapturedAt = _capturedAt
+		// The forced usage refresh at midnight is recorded immediately before this boundary.
+		// Treat that observation as the day's baseline instead of consumption from 100%.
+		_dayUsage.AccumulatedUsedPercent = 0
+		_dayUsage.AccumulatedKnown = true
+		_dayUsage.QuotaResetCount = 0
+		_dayUsage.CurrentRemaining = _remainingPercent
+		_dayUsage.CurrentKnown = true
+		_dayUsage.CurrentCapturedAt = _capturedAt
 	} else {
+		recordRemainingObservation(&_dayUsage, _remainingPercent, _capturedAt)
 		_dayUsage.EndRemainingPercent = _remainingPercent
 		_dayUsage.EndKnown = true
 		_dayUsage.EndCapturedAt = _capturedAt
@@ -218,10 +228,77 @@ func (_r *Recorder) recordDayBoundary(_providerID string, _remainingPercent floa
 }
 
 // -------------------------------------------------------------------------------------
-// LoadMonth aggregates completed daily quota windows for the supplied enabled providers.
-// Daily usage is the remaining quota at 00:00 minus the remaining quota at 23:59. If a
-// start boundary could not be captured, 100 percent is used as the conservative baseline.
-// A quota reset can increase the remaining value; those negative deltas are reported as zero.
+// LoadMonth aggregates daily quota usage for the supplied enabled providers. Usage is the
+// sum of every positive remaining-quota drop observed during the day. When quota increases,
+// the previous segment is retained and a new quota cycle begins, so same-day resets cannot
+// erase usage already consumed. Legacy records without accumulated observations retain the
+// original start-minus-latest calculation, using 100 percent when no start boundary exists.
+// -------------------------------------------------------------------------------------
+// TodayUsagePercent 回傳今日已消耗的配額百分比（跨 provider 平均），
+// 與 LoadMonth 的當日數值採同一套語意。
+//
+// 它是輕量版：只讀今天那一筆，不複製整個月檔 —— 這條路徑會被每次請求的
+// 降級判斷叫到，走 LoadMonth 會付出整月資料的複製成本。
+//
+// 第二個回傳值表示「今天有沒有可用的觀測」。沒有觀測時不能當成 0%：
+// 那是「還不知道」，用它當門檻會在服務剛啟動時錯誤地放行所有偵測。
+func (_r *Recorder) TodayUsagePercent(_providerIDs []string, _at time.Time) (float64, bool) {
+	if _r == nil {
+		return 0, false
+	}
+	if _at.IsZero() {
+		_at = time.Now()
+	}
+	_at = _at.Local()
+	_day := _at.Format("2006-01-02")
+	_selected := selectedProviderIDs(_providerIDs)
+
+	_r.lock.Lock()
+	defer _r.lock.Unlock()
+
+	_file, _err := _r.loadMonthLocked(_at.Format("2006-01"))
+	if _err != nil {
+		return 0, false
+	}
+
+	_total := 0.0
+	_count := 0
+	for _providerID := range _selected {
+		_provider, _ok := _file.Providers[_providerID]
+		if !_ok {
+			continue
+		}
+		_usage, _ok := _provider.Days[_day]
+		if !_ok {
+			continue
+		}
+		_currentRemaining := 0.0
+		switch {
+		case _usage.EndKnown:
+			_currentRemaining = _usage.EndRemainingPercent
+		case _usage.CurrentKnown:
+			_currentRemaining = _usage.CurrentRemaining
+		default:
+			continue
+		}
+		_usagePercent := _usage.AccumulatedUsedPercent
+		if !_usage.AccumulatedKnown {
+			_startRemaining := 100.0
+			if _usage.StartKnown {
+				_startRemaining = _usage.StartRemainingPercent
+			}
+			_usagePercent = math.Max(0, _startRemaining-_currentRemaining)
+		}
+		_total += _usagePercent
+		_count++
+	}
+
+	if _count == 0 {
+		return 0, false
+	}
+	return roundUsagePercent(_total / float64(_count)), true
+}
+
 // -------------------------------------------------------------------------------------
 func (_r *Recorder) LoadMonth(_providerIDs []string, _month string) (MonthStats, error) {
 	if _r == nil {
@@ -265,12 +342,16 @@ func (_r *Recorder) LoadMonth(_providerIDs []string, _month string) (MonthStats,
 				// Legacy raw observations have no reliable same-day boundary semantics.
 				continue
 			}
-			_startRemaining := 100.0
-			if _usage.StartKnown {
-				_startRemaining = _usage.StartRemainingPercent
+			_usagePercent := _usage.AccumulatedUsedPercent
+			if !_usage.AccumulatedKnown {
+				_startRemaining := 100.0
+				if _usage.StartKnown {
+					_startRemaining = _usage.StartRemainingPercent
+				}
+				_usagePercent = math.Max(0, _startRemaining-_currentRemaining)
 			}
 			_byDay[_day] = append(_byDay[_day], _daySample{
-				UsagePercent:     math.Max(0, _startRemaining-_currentRemaining),
+				UsagePercent:     _usagePercent,
 				RemainingPercent: _currentRemaining,
 				Completed:        _completed,
 			})
@@ -289,7 +370,7 @@ func (_r *Recorder) LoadMonth(_providerIDs []string, _month string) (MonthStats,
 		}
 		_days = append(_days, DayStat{
 			Date:             _day,
-			UsagePercent:     roundPercent(_usageTotal / float64(len(_samples))),
+			UsagePercent:     roundUsagePercent(_usageTotal / float64(len(_samples))),
 			RemainingPercent: roundPercent(_remainingTotal / float64(len(_samples))),
 			ProviderCount:    len(_samples),
 			Completed:        _completed,
@@ -306,6 +387,50 @@ func (_r *Recorder) LoadMonth(_providerIDs []string, _month string) (MonthStats,
 		ObservedDays:  len(_days),
 		UpdatedAt:     _file.UpdatedAt,
 	}, nil
+}
+
+// recordRemainingObservation accumulates only quota consumption. A higher remaining value
+// means that the upstream reset or replenished its quota; it starts a new segment without
+// subtracting usage already accumulated in the current calendar day.
+// -------------------------------------------------------------------------------------
+func recordRemainingObservation(_usage *DayUsage, _remainingPercent float64, _capturedAt string) {
+	if _usage == nil {
+		return
+	}
+	_remainingPercent = clampPercent(_remainingPercent)
+	_previousRemaining := 100.0
+	if _usage.CurrentKnown {
+		_previousRemaining = clampPercent(_usage.CurrentRemaining)
+	} else if _usage.StartKnown {
+		_previousRemaining = clampPercent(_usage.StartRemainingPercent)
+	}
+
+	if !_usage.AccumulatedKnown {
+		// Migrate an in-memory legacy record before applying the new observation. Historical
+		// reset segments that were never persisted cannot be reconstructed, but subsequent
+		// observations remain accurate and no longer erase the recovered baseline usage.
+		_baseline := 100.0
+		if _usage.StartKnown {
+			_baseline = clampPercent(_usage.StartRemainingPercent)
+		}
+		if _usage.CurrentKnown {
+			_usage.AccumulatedUsedPercent = math.Max(
+				_usage.AccumulatedUsedPercent,
+				math.Max(0, _baseline-_previousRemaining),
+			)
+		}
+		_usage.AccumulatedKnown = true
+	}
+
+	const _quotaComparisonTolerance = 0.0001
+	if _remainingPercent < _previousRemaining-_quotaComparisonTolerance {
+		_usage.AccumulatedUsedPercent += _previousRemaining - _remainingPercent
+	} else if _remainingPercent > _previousRemaining+_quotaComparisonTolerance && _usage.CurrentKnown {
+		_usage.QuotaResetCount++
+	}
+	_usage.CurrentRemaining = _remainingPercent
+	_usage.CurrentKnown = true
+	_usage.CurrentCapturedAt = _capturedAt
 }
 
 // Flush persists all queued records. It is safe to call on service shutdown.
@@ -476,4 +601,12 @@ func clampPercent(_value float64) float64 {
 // -------------------------------------------------------------------------------------
 func roundPercent(_value float64) float64 {
 	return math.Round(clampPercent(_value)*10) / 10
+}
+
+// -------------------------------------------------------------------------------------
+func roundUsagePercent(_value float64) float64 {
+	if math.IsNaN(_value) || math.IsInf(_value, 0) || _value < 0 {
+		return 0
+	}
+	return math.Round(_value*10) / 10
 }

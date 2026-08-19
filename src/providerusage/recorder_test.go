@@ -147,7 +147,33 @@ func TestRecorderReportsLiveDailyUsageBeforeDayEnd(t *testing.T) {
 }
 
 // -------------------------------------------------------------------------------------
-func TestRecorderUsesLatestLiveRemainingAfterQuotaReset(t *testing.T) {
+func TestRecorderDayStartReplacesMidnightProbeWithBoundaryBaseline(t *testing.T) {
+	_recorder := NewRecorder(filepath.Join(t.TempDir(), "provider_usage"))
+	_start := time.Date(2026, time.August, 11, 0, 0, 0, 0, time.Local)
+
+	// Daily accounting refreshes the provider first; that refresh records a live sample
+	// before RecordDayStart captures the explicit midnight boundary.
+	if _err := _recorder.Record("provider-a", 20, 80, _start); _err != nil {
+		t.Fatalf("record midnight probe: %v", _err)
+	}
+	if _err := _recorder.RecordDayStart("provider-a", 80, _start); _err != nil {
+		t.Fatalf("record day start: %v", _err)
+	}
+	if _err := _recorder.Record("provider-a", 25, 75, _start.Add(time.Hour)); _err != nil {
+		t.Fatalf("record live usage: %v", _err)
+	}
+
+	_stats, _err := _recorder.LoadMonth([]string{"provider-a"}, "2026-08")
+	if _err != nil {
+		t.Fatalf("load month: %v", _err)
+	}
+	if len(_stats.Days) != 1 || _stats.Days[0].UsagePercent != 5 || _stats.Days[0].RemainingPercent != 75 {
+		t.Fatalf("stats = %#v", _stats)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestRecorderAccumulatesUsageAcrossSameDayQuotaReset(t *testing.T) {
 	_recorder := NewRecorder(filepath.Join(t.TempDir(), "provider_usage"))
 	_start := time.Date(2026, time.August, 11, 0, 0, 0, 0, time.Local)
 
@@ -160,12 +186,117 @@ func TestRecorderUsesLatestLiveRemainingAfterQuotaReset(t *testing.T) {
 	if _err := _recorder.Record("provider-a", 10, 90, _start.Add(12*time.Hour)); _err != nil {
 		t.Fatalf("record reset live usage: %v", _err)
 	}
+	if _err := _recorder.Record("provider-a", 25, 75, _start.Add(16*time.Hour)); _err != nil {
+		t.Fatalf("record usage after reset: %v", _err)
+	}
 
 	_stats, _err := _recorder.LoadMonth([]string{"provider-a"}, "2026-08")
 	if _err != nil {
 		t.Fatalf("load month: %v", _err)
 	}
-	if len(_stats.Days) != 1 || _stats.Days[0].UsagePercent != 10 || _stats.Days[0].RemainingPercent != 90 {
+	if len(_stats.Days) != 1 || _stats.Days[0].UsagePercent != 35 || _stats.Days[0].RemainingPercent != 75 {
 		t.Fatalf("stats = %#v", _stats)
 	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestRecorderPreservesAccumulatedUsageAcrossReloadAndMultipleResets(t *testing.T) {
+	_root := filepath.Join(t.TempDir(), "provider_usage")
+	_start := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.Local)
+	_recorder := NewRecorder(_root)
+
+	if _err := _recorder.RecordDayStart("provider-a", 100, _start); _err != nil {
+		t.Fatalf("record day start: %v", _err)
+	}
+	if _err := _recorder.Record("provider-a", 20, 80, _start.Add(4*time.Hour)); _err != nil {
+		t.Fatalf("record first segment: %v", _err)
+	}
+	if _err := _recorder.Record("provider-a", 0, 100, _start.Add(5*time.Hour)); _err != nil {
+		t.Fatalf("record first reset: %v", _err)
+	}
+	if _err := _recorder.Flush(); _err != nil {
+		t.Fatalf("flush: %v", _err)
+	}
+
+	_reloaded := NewRecorder(_root)
+	if _err := _reloaded.Record("provider-a", 10, 90, _start.Add(8*time.Hour)); _err != nil {
+		t.Fatalf("record second segment: %v", _err)
+	}
+	if _err := _reloaded.Record("provider-a", 0, 100, _start.Add(10*time.Hour)); _err != nil {
+		t.Fatalf("record second reset: %v", _err)
+	}
+	if _err := _reloaded.Record("provider-a", 5, 95, _start.Add(12*time.Hour)); _err != nil {
+		t.Fatalf("record third segment: %v", _err)
+	}
+
+	_stats, _err := _reloaded.LoadMonth([]string{"provider-a"}, "2026-08")
+	if _err != nil {
+		t.Fatalf("load month: %v", _err)
+	}
+	if len(_stats.Days) != 1 || _stats.Days[0].UsagePercent != 35 || _stats.Days[0].RemainingPercent != 95 {
+		t.Fatalf("stats = %#v", _stats)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 今日用量查詢：沒有觀測時必須回報「不知道」，不能回 0 ——
+// 它會被當成降級偵測的啟動門檻，0 與「未知」的後果完全相反。
+func TestTodayUsagePercentReportsUnknown(t *testing.T) {
+	_recorder := NewRecorder(filepath.Join(t.TempDir(), "provider-usage"))
+	_now := time.Now()
+
+	if _, _known := _recorder.TodayUsagePercent([]string{"p1"}, _now); _known {
+		t.Fatalf("no observation yet must report unknown")
+	}
+
+	if _err := _recorder.RecordDayStart("p1", 100, _now); _err != nil {
+		t.Fatal(_err)
+	}
+	if _err := _recorder.Record("p1", 0, 78, _now); _err != nil {
+		t.Fatal(_err)
+	}
+
+	_usage, _known := _recorder.TodayUsagePercent([]string{"p1"}, _now)
+	if !_known {
+		t.Fatalf("observation exists, should be known")
+	}
+	if _usage < 21.9 || _usage > 22.1 {
+		t.Fatalf("today usage = %v, want ~22", _usage)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 跨 provider 取平均，語意與 LoadMonth 的當日數值一致。
+func TestTodayUsagePercentMatchesLoadMonth(t *testing.T) {
+	_recorder := NewRecorder(filepath.Join(t.TempDir(), "provider-usage"))
+	_now := time.Now()
+	for _id, _remaining := range map[string]float64{"p1": 70, "p2": 90} {
+		if _err := _recorder.RecordDayStart(_id, 100, _now); _err != nil {
+			t.Fatal(_err)
+		}
+		if _err := _recorder.Record(_id, 0, _remaining, _now); _err != nil {
+			t.Fatal(_err)
+		}
+	}
+
+	_usage, _known := _recorder.TodayUsagePercent([]string{"p1", "p2"}, _now)
+	if !_known {
+		t.Fatalf("should be known")
+	}
+
+	_stats, _err := _recorder.LoadMonth([]string{"p1", "p2"}, _now.Format("2006-01"))
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	_today := _now.Format("2006-01-02")
+	for _, _day := range _stats.Days {
+		if _day.Date != _today {
+			continue
+		}
+		if _usage != _day.UsagePercent {
+			t.Fatalf("lightweight query disagrees with LoadMonth: %v != %v", _usage, _day.UsagePercent)
+		}
+		return
+	}
+	t.Fatalf("today missing from LoadMonth: %+v", _stats.Days)
 }

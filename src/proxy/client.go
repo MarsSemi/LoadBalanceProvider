@@ -83,10 +83,32 @@ type ChatMetrics struct {
 	ClientContentItems int
 	StreamedHanChars   int
 	StreamedOtherChars int
-	TotalResponseMS    float64
-	ContentSeen        bool
-	ProviderTiming     bool
-	TerminalSeen       bool
+	// 以下把串流出來的字元依用途拆開。解析器本來就在看每個事件，
+	// 這裡只是把既有結果分類存放，不是新增解析。
+	//   Prose     ＝ 真的給人看的輸出
+	//   Reasoning ＝ 推理內容／摘要
+	//   Tool      ＝ 工具呼叫的參數
+	// 一個只發工具呼叫的 turn，Prose 會是 0 —— 這比數工具數量更直接，
+	// 而且完全不依賴工具名稱，任何客戶端都適用。
+	ProseHanChars       int
+	ProseOtherChars     int
+	ReasoningHanChars   int
+	ReasoningOtherChars int
+	ToolHanChars        int
+	ToolOtherChars      int
+	ToolCallCount       int
+	// ReportedReasoningTokens 是上游回報的推理量，精確值。
+	// 字元估算取代不了它：多數 provider 根本不串流推理內容，
+	// 就算開了摘要，摘要也比實際推理量小一個數量級。
+	ReportedReasoningTokens int
+	// ReasoningReported 表示上游「有回報這個欄位」，與值是不是 0 無關。
+	// 不回報推理的模型會讓推理量恆為 0，那是「量不到」不是「不需要」——
+	// 兩者混在一起會讓依推理量做的判斷全面誤判。
+	ReasoningReported bool
+	TotalResponseMS   float64
+	ContentSeen       bool
+	ProviderTiming    bool
+	TerminalSeen      bool
 }
 
 // -------------------------------------------------------------------------------------
@@ -2672,6 +2694,28 @@ func isUsageOnlyEvent(_event string) bool {
 }
 
 // -------------------------------------------------------------------------------------
+// ProseTokens 是「真的給人看的」輸出量估算。工具呼叫參數與推理內容都不算在內，
+// 所以一個只發工具呼叫的 turn 會回傳 0。
+func (_m ChatMetrics) ProseTokens() int {
+	return estimateTokensFromCounts(_m.ProseHanChars, _m.ProseOtherChars)
+}
+
+// -------------------------------------------------------------------------------------
+// ReasoningTokens 優先回傳上游回報的精確值，沒有回報時才退回字元估算。
+func (_m ChatMetrics) ReasoningTokens() int {
+	if _m.ReportedReasoningTokens > 0 {
+		return _m.ReportedReasoningTokens
+	}
+	return estimateTokensFromCounts(_m.ReasoningHanChars, _m.ReasoningOtherChars)
+}
+
+// -------------------------------------------------------------------------------------
+// ToolTokens 是工具呼叫參數的量估算。
+func (_m ChatMetrics) ToolTokens() int {
+	return estimateTokensFromCounts(_m.ToolHanChars, _m.ToolOtherChars)
+}
+
+// -------------------------------------------------------------------------------------
 func (_m *ChatMetrics) merge(_other ChatMetrics) {
 	if _m.FirstResponseMS <= 0 && _other.FirstResponseMS > 0 {
 		_m.FirstResponseMS = _other.FirstResponseMS
@@ -2682,6 +2726,20 @@ func (_m *ChatMetrics) merge(_other ChatMetrics) {
 	if _other.StreamedHanChars > 0 || _other.StreamedOtherChars > 0 {
 		_m.StreamedHanChars += _other.StreamedHanChars
 		_m.StreamedOtherChars += _other.StreamedOtherChars
+	}
+	_m.ProseHanChars += _other.ProseHanChars
+	_m.ProseOtherChars += _other.ProseOtherChars
+	_m.ReasoningHanChars += _other.ReasoningHanChars
+	_m.ReasoningOtherChars += _other.ReasoningOtherChars
+	_m.ToolHanChars += _other.ToolHanChars
+	_m.ToolOtherChars += _other.ToolOtherChars
+	_m.ToolCallCount += _other.ToolCallCount
+	// usage 在串流裡通常只出現一次且是總量，相加會重複計算。
+	if _other.ReportedReasoningTokens > _m.ReportedReasoningTokens {
+		_m.ReportedReasoningTokens = _other.ReportedReasoningTokens
+	}
+	if _other.ReasoningReported {
+		_m.ReasoningReported = true
 	}
 	if _other.CompletionTokens > 0 {
 		if _other.EstimatedTokens {
@@ -2879,19 +2937,78 @@ func responseMetrics(_body []byte) ChatMetrics {
 	}
 	_generationDuration := responseGenerationDurationMS(_payload)
 	_generationTPS := responseGenerationTPS(_payload)
+	_parts := responseParts(_payload)
 	_metrics := ChatMetrics{
-		CompletionTokens:   _tokens,
-		FirstResponseMS:    responseFirstTokenMS(_payload),
-		GenerationDuration: _generationDuration,
-		GenerationTPS:      _generationTPS,
-		ContentSeen:        strings.TrimSpace(_text) != "",
-		ProviderTiming:     _generationDuration > 0 || _generationTPS > 0,
+		CompletionTokens:        _tokens,
+		FirstResponseMS:         responseFirstTokenMS(_payload),
+		GenerationDuration:      _generationDuration,
+		GenerationTPS:           _generationTPS,
+		ContentSeen:             strings.TrimSpace(_text) != "",
+		ProviderTiming:          _generationDuration > 0 || _generationTPS > 0,
+		ToolCallCount:           _parts.ToolCalls,
+		ReportedReasoningTokens: payloadReasoningTokens(_payload),
+		ReasoningReported:       payloadReportsReasoning(_payload),
 	}
+	_metrics.ProseHanChars, _metrics.ProseOtherChars = tokenCharCounts(_parts.Prose)
+	_metrics.ReasoningHanChars, _metrics.ReasoningOtherChars = tokenCharCounts(_parts.Reasoning)
+	_metrics.ToolHanChars, _metrics.ToolOtherChars = tokenCharCounts(_parts.Tool)
 	if _metrics.CompletionTokens <= 0 {
 		_metrics.CompletionTokens = estimateTokens(_text)
 		_metrics.EstimatedTokens = true
 	}
 	return _metrics
+}
+
+// -------------------------------------------------------------------------------------
+// responseParts 是非串流回應的用途拆分。串流走事件型別，這裡走輸出項目的 type。
+func responseParts(_payload map[string]interface{}) streamTextParts {
+	var _prose, _reasoning, _tool strings.Builder
+	_calls := appendChoiceParts(&_prose, &_reasoning, &_tool, _payload)
+	appendTextFields(&_prose, _payload, "output_text", "text")
+	_calls += appendOutputItems(&_prose, &_reasoning, &_tool, _payload["output"])
+	if _nested, _ok := _payload["response"].(map[string]interface{}); _ok {
+		_inner := responseParts(_nested)
+		_prose.WriteString(_inner.Prose)
+		_reasoning.WriteString(_inner.Reasoning)
+		_tool.WriteString(_inner.Tool)
+		_calls += _inner.ToolCalls
+	}
+	return streamTextParts{
+		Prose:     _prose.String(),
+		Reasoning: _reasoning.String(),
+		Tool:      _tool.String(),
+		ToolCalls: _calls,
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// appendOutputItems 走 Responses API 的 output 陣列，依項目型別分流。
+func appendOutputItems(_prose *strings.Builder, _reasoning *strings.Builder, _tool *strings.Builder, _value interface{}) int {
+	_items, _ok := _value.([]interface{})
+	if !_ok {
+		return 0
+	}
+
+	_calls := 0
+	for _, _raw := range _items {
+		_item, _ok := _raw.(map[string]interface{})
+		if !_ok {
+			continue
+		}
+		_type := strings.ToLower(strings.TrimSpace(stringFromAny(_item["type"])))
+		switch {
+		case strings.HasSuffix(_type, "_call"):
+			_calls++
+			appendTextFields(_tool, _item, "arguments", "input")
+		case strings.Contains(_type, "reasoning"):
+			appendTextValue(_reasoning, _item["summary"])
+			appendTextFields(_reasoning, _item, "content", "text")
+		default:
+			appendTextValue(_prose, _item["content"])
+			appendTextFields(_prose, _item, "text", "output_text")
+		}
+	}
+	return _calls
 }
 
 // -------------------------------------------------------------------------------------
@@ -2923,7 +3040,15 @@ func streamDataMetrics(_line string) ChatMetrics {
 		_metrics.CompletionTokens = _tokens
 	}
 
-	_text := streamResponseText(_payload)
+	_metrics.ReportedReasoningTokens = payloadReasoningTokens(_payload)
+	_metrics.ReasoningReported = payloadReportsReasoning(_payload)
+	_parts := streamResponseParts(_payload)
+	_metrics.ToolCallCount = _parts.ToolCalls
+	_metrics.ProseHanChars, _metrics.ProseOtherChars = tokenCharCounts(_parts.Prose)
+	_metrics.ReasoningHanChars, _metrics.ReasoningOtherChars = tokenCharCounts(_parts.Reasoning)
+	_metrics.ToolHanChars, _metrics.ToolOtherChars = tokenCharCounts(_parts.Tool)
+
+	_text := _parts.Prose + _parts.Reasoning + _parts.Tool
 	if strings.TrimSpace(_text) == "" {
 		return _metrics
 	}
@@ -2967,6 +3092,48 @@ func usageCompletionTokens(_payload map[string]interface{}) int {
 		return _completionTokens
 	}
 	return reasoningTokenCount(_usage)
+}
+
+// -------------------------------------------------------------------------------------
+// payloadReportsReasoning 檢查 usage 裡「有沒有這個欄位」，不看值。
+// 回報 0 代表這輪沒有推理；完全不回報代表這個模型量不到，兩者必須分開。
+func payloadReportsReasoning(_payload map[string]interface{}) bool {
+	if _usage, _ok := _payload["usage"].(map[string]interface{}); _ok {
+		for _, _key := range []string{"reasoning_tokens", "reasoning_output_tokens"} {
+			if _, _ok := _usage[_key]; _ok {
+				return true
+			}
+		}
+		for _, _key := range []string{"completion_tokens_details", "output_tokens_details"} {
+			_details, _ok := _usage[_key].(map[string]interface{})
+			if !_ok {
+				continue
+			}
+			for _, _field := range []string{"reasoning_tokens", "reasoning"} {
+				if _, _ok := _details[_field]; _ok {
+					return true
+				}
+			}
+		}
+	}
+	if _nested, _ok := _payload["response"].(map[string]interface{}); _ok {
+		return payloadReportsReasoning(_nested)
+	}
+	return false
+}
+
+// -------------------------------------------------------------------------------------
+// payloadReasoningTokens 從 usage 取出上游回報的推理量，並跟著 response 巢狀往下找。
+func payloadReasoningTokens(_payload map[string]interface{}) int {
+	if _usage, _ok := _payload["usage"].(map[string]interface{}); _ok {
+		if _tokens := reasoningTokenCount(_usage); _tokens > 0 {
+			return _tokens
+		}
+	}
+	if _nested, _ok := _payload["response"].(map[string]interface{}); _ok {
+		return payloadReasoningTokens(_nested)
+	}
+	return 0
 }
 
 // -------------------------------------------------------------------------------------
@@ -3107,19 +3274,120 @@ func responseText(_payload map[string]interface{}) string {
 
 // -------------------------------------------------------------------------------------
 func streamResponseText(_payload map[string]interface{}) string {
-	var _builder strings.Builder
-	appendChoiceText(&_builder, _payload)
+	_parts := streamResponseParts(_payload)
+	return _parts.Prose + _parts.Reasoning + _parts.Tool
+}
+
+// -------------------------------------------------------------------------------------
+// streamTextParts 是同一個事件裡依用途拆開的文字。三段相加等於先前
+// streamResponseText 的結果，所以既有的字元／token 估算完全不受影響。
+type streamTextParts struct {
+	Prose     string
+	Reasoning string
+	Tool      string
+	ToolCalls int
+}
+
+// -------------------------------------------------------------------------------------
+func streamResponseParts(_payload map[string]interface{}) streamTextParts {
+	var _prose, _reasoning, _tool strings.Builder
+	_calls := appendChoiceParts(&_prose, &_reasoning, &_tool, _payload)
+
 	_eventType := strings.ToLower(strings.TrimSpace(stringFromAny(_payload["type"])))
 	switch _eventType {
-	case "response.output_text.delta",
-		"response.reasoning_text.delta",
-		"response.reasoning_summary_text.delta",
-		"response.refusal.delta",
-		"response.function_call_arguments.delta",
-		"response.mcp_call_arguments.delta":
-		appendTextValue(&_builder, _payload["delta"])
+	case "response.output_text.delta", "response.refusal.delta":
+		appendTextValue(&_prose, _payload["delta"])
+	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
+		appendTextValue(&_reasoning, _payload["delta"])
+	case "response.function_call_arguments.delta", "response.mcp_call_arguments.delta":
+		appendTextValue(&_tool, _payload["delta"])
+	case "response.output_item.added":
+		// 用字尾比對而不是列舉工具型別：function_call、local_shell_call、
+		// custom_tool_call、mcp_call…… 上游新增型別時不必跟著改。
+		if _item, _ok := _payload["item"].(map[string]interface{}); _ok {
+			if strings.HasSuffix(strings.ToLower(stringFromAny(_item["type"])), "_call") {
+				_calls++
+			}
+		}
 	}
-	return _builder.String()
+
+	return streamTextParts{
+		Prose:     _prose.String(),
+		Reasoning: _reasoning.String(),
+		Tool:      _tool.String(),
+		ToolCalls: _calls,
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// appendChoiceParts 處理 chat completions 的 choices 形狀，回傳新起頭的工具呼叫數。
+func appendChoiceParts(_prose *strings.Builder, _reasoning *strings.Builder, _tool *strings.Builder, _payload map[string]interface{}) int {
+	_choices, _ok := _payload["choices"].([]interface{})
+	if !_ok {
+		return 0
+	}
+
+	_calls := 0
+	for _, _item := range _choices {
+		_choice, _ok := _item.(map[string]interface{})
+		if !_ok {
+			continue
+		}
+		for _, _key := range []string{"delta", "message"} {
+			_section, _ok := _choice[_key].(map[string]interface{})
+			if !_ok {
+				continue
+			}
+			appendTextFields(_reasoning, _section, "reasoning_content", "reasoning", "thinking", "reasoning_text")
+			appendTextFields(_prose, _section, "text", "output_text")
+			appendMessageContent(_prose, _section["content"])
+			_calls += appendToolCallArguments(_tool, _section["tool_calls"])
+		}
+		appendTextFields(_reasoning, _choice, "reasoning_content", "reasoning", "thinking", "reasoning_text")
+		appendTextFields(_prose, _choice, "text", "output_text")
+	}
+	return _calls
+}
+
+// -------------------------------------------------------------------------------------
+func appendMessageContent(_builder *strings.Builder, _value interface{}) {
+	switch _content := _value.(type) {
+	case string:
+		_builder.WriteString(_content)
+	case []interface{}:
+		for _, _part := range _content {
+			if _partMap, _ok := _part.(map[string]interface{}); _ok {
+				if _text, _ok := _partMap["text"].(string); _ok {
+					_builder.WriteString(_text)
+				}
+			}
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// appendToolCallArguments 收集 chat completions 的 tool_calls 參數。
+// 只有每個工具呼叫的第一個分塊帶 id，用它來計數才不會把同一個呼叫算很多次。
+func appendToolCallArguments(_builder *strings.Builder, _value interface{}) int {
+	_items, _ok := _value.([]interface{})
+	if !_ok {
+		return 0
+	}
+
+	_calls := 0
+	for _, _item := range _items {
+		_call, _ok := _item.(map[string]interface{})
+		if !_ok {
+			continue
+		}
+		if strings.TrimSpace(stringFromAny(_call["id"])) != "" {
+			_calls++
+		}
+		if _function, _ok := _call["function"].(map[string]interface{}); _ok {
+			appendTextFields(_builder, _function, "arguments")
+		}
+	}
+	return _calls
 }
 
 // -------------------------------------------------------------------------------------

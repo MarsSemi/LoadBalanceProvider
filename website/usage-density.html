@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>即時監看</title>
+  <script src="i18n.js"></script>
+  <style>
+    :root {
+      --bg: #fafafa;
+      --panel: #fff;
+      --surface: #f5f5f5;
+      --line: #dedede;
+      --line-soft: #ececec;
+      --text: #181818;
+      --muted: #737373;
+      --green: #2f855f;
+      --green-soft: #e7f3ed;
+      --amber: #a66f18;
+      --amber-soft: #fbf2df;
+      --yellow: #c58b00;
+      --red: #c2413b;
+      --red-soft: #faeaea;
+      --blue: #286f9d;
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans TC", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; background: var(--bg); color: var(--text); scrollbar-width: none; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar, .table-wrap::-webkit-scrollbar { display: none; }
+    button, select { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .42; }
+    svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .page { width: min(1280px, calc(100vw - 48px)); margin: 34px auto 48px; }
+    .hero { display: flex; align-items: start; justify-content: space-between; gap: 20px; margin-bottom: 18px; }
+    .eyebrow { margin-bottom: 7px; color: #999; font-size: 12px; font-weight: 800; }
+    h1, p { margin: 0; }
+    h1 { margin-bottom: 7px; font-size: 27px; line-height: 1.15; letter-spacing: 0; }
+    .subtitle { color: var(--muted); font-size: 14px; }
+    .hero-actions { display: flex; align-items: center; gap: 9px; }
+    .refresh-note { color: var(--muted); font-size: 12px; white-space: nowrap; }
+
+    .icon-button {
+      width: 40px;
+      height: 40px;
+      display: inline-grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: #333;
+    }
+    .icon-button:hover:not(:disabled) { border-color: #aaa; background: #f6f6f6; }
+    .icon-button.loading svg { animation: spin .8s linear infinite; }
+
+    .panel { margin-bottom: 18px; overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    .toolbar { min-height: 72px; display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+    .toolbar-fields { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+    .field { display: grid; gap: 7px; }
+    .field label { color: #555; font-size: 12px; font-weight: 750; }
+    select { height: 40px; min-width: 150px; padding: 0 12px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; color: var(--text); }
+    .sample-status { color: var(--muted); font-size: 12px; line-height: 1.6; text-align: right; }
+
+    .summary-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; padding: 14px 16px; background: #fbfbfb; }
+    .summary-card { min-width: 0; min-height: 104px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; }
+    .summary-label { color: #555; font-size: 12px; font-weight: 750; }
+    .summary-value { margin-top: 10px; font-size: 27px; line-height: 1; font-weight: 850; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .summary-note { margin-top: 8px; overflow: hidden; color: var(--muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+    .summary-card.low .summary-value { color: var(--green); }
+    .summary-card.mid .summary-value { color: var(--yellow); }
+    .summary-card.high .summary-value { color: var(--red); }
+
+    .panel-table { overflow: visible; }
+    .panel-table .table-wrap { border-bottom-left-radius: var(--radius); border-bottom-right-radius: var(--radius); }
+    .table-heading { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--line); }
+    .table-title { font-size: 14px; font-weight: 800; }
+    .table-tools { display: flex; align-items: center; gap: 10px; }
+    .column-menu-wrap { position: relative; }
+    .column-menu {
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      z-index: 30;
+      min-width: 190px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: 0 14px 36px rgba(0,0,0,.13);
+    }
+    .column-menu[hidden] { display: none; }
+    .column-menu-head { margin-bottom: 8px; padding: 0 6px; color: #555; font-size: 12px; font-weight: 800; }
+    .column-menu-list { display: grid; gap: 1px; }
+    .column-menu-item { display: flex; align-items: center; gap: 9px; padding: 6px; border-radius: 7px; font-size: 13px; font-weight: 700; }
+    .column-menu-item:hover { background: var(--surface); }
+    .column-menu-item input { width: 15px; height: 15px; margin: 0; accent-color: var(--text); }
+    .column-menu-reset { width: 100%; margin-top: 8px; padding: 7px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); color: #444; font-size: 12px; font-weight: 800; }
+    .column-menu-reset:hover { border-color: #aaa; background: #f6f6f6; }
+    .pagination { display: flex; align-items: center; gap: 10px; }
+    .page-status { min-width: 52px; color: #444; font-size: 12px; font-weight: 800; text-align: center; }
+    .table-wrap { overflow: auto; scrollbar-width: none; }
+    table { width: 100%; min-width: 1240px; border-collapse: collapse; table-layout: fixed; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid var(--line-soft); text-align: left; vertical-align: middle; font-size: 13px; }
+    th { position: sticky; top: 0; z-index: 1; background: #fbfbfc; color: var(--muted); font-size: 12px; }
+    tbody tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #fcfcfc; }
+    .col-name { width: 12%; }
+    .col-total { width: 6%; }
+    .col-rate { width: 6%; }
+    .col-cost { width: 7%; }
+    .col-prose { width: 7%; }
+    .col-reason { width: 7%; }
+    .col-tier { width: 12%; }
+    .col-model { width: 7%; }
+    .col-yield { width: 7%; }
+    .col-last { width: 7%; }
+    .account-name { display: block; overflow-wrap: anywhere; font-weight: 800; }
+    .account-type { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .number { font-weight: 800; font-variant-numeric: tabular-nums; }
+    .cost-total { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .cost-pending { color: var(--muted); font-weight: 700; }
+    .model-label { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+    .tier-cell { display: grid; gap: 6px; }
+    .tier-main { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+    .tier-count { font-weight: 850; font-variant-numeric: tabular-nums; }
+    .tier-share { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+    .tier-foot { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 8px; }
+    .tier-rate, .tier-cost { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .tier-track { height: 3px; overflow: hidden; border-radius: 999px; background: #ececec; }
+    .tier-fill { display: block; height: 100%; min-width: 0; border-radius: inherit; }
+    .tier-cell.low .tier-fill { background: var(--green); }
+    .tier-cell.mid .tier-fill { background: var(--yellow); }
+    .tier-cell.high .tier-fill { background: var(--red); }
+    .sort-button { display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; color: inherit; font-weight: inherit; }
+    .sort-mark { min-width: 10px; color: #222; }
+    .last-time { color: #555; font-variant-numeric: tabular-nums; }
+    .truncated { display: block; margin-top: 4px; color: var(--amber); font-size: 10px; }
+    .empty { padding: 54px 20px; color: var(--muted); text-align: center; }
+
+    .error-banner { display: none; margin-bottom: 18px; padding: 12px 14px; border: 1px solid #e1b6b6; border-radius: var(--radius); background: #fff5f5; color: var(--red); font-size: 13px; }
+    .error-banner.visible { display: block; }
+    .loading-mask { position: fixed; inset: 0; z-index: 30; display: none; place-items: center; background: rgba(250, 250, 250, .72); backdrop-filter: blur(2px); }
+    .loading-mask.visible { display: grid; }
+    .loading-box { min-width: 230px; display: grid; justify-items: center; gap: 13px; padding: 24px; border: 1px solid var(--line); border-radius: var(--radius); background: #fff; box-shadow: 0 16px 42px rgba(0,0,0,.09); color: #444; font-size: 13px; }
+    .spinner { width: 29px; height: 29px; border: 3px solid #e2e2e2; border-top-color: #222; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    @media (max-width: 1050px) {
+      .summary-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      .page { width: calc(100vw - 28px); margin-top: 22px; }
+      .hero, .toolbar { align-items: stretch; flex-direction: column; }
+      .hero-actions { justify-content: space-between; }
+      .sample-status { text-align: left; }
+      .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <div class="eyebrow">即時監看</div>
+        <h1>請求密度</h1>
+        <p class="subtitle">觀察各帳號近期請求頻率與輸出比分布，找出以高階模型處理低輸出請求的帳號。</p>
+      </div>
+      <div class="hero-actions">
+        <span class="refresh-note" id="refreshNote">尚未更新</span>
+        <button class="icon-button" type="button" id="refreshButton" title="重新載入" aria-label="重新載入">
+          <svg viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.6 6"></path><path d="M3 12a9 9 0 0 1 15.6-6"></path><path d="M3 19v-5h5"></path><path d="M21 5v5h-5"></path></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="error-banner" id="errorBanner" role="alert"></div>
+
+    <section class="panel">
+      <div class="toolbar">
+        <div class="toolbar-fields">
+          <div class="field">
+            <label for="windowSelect">觀察視窗</label>
+            <select id="windowSelect">
+              <option value="1m">1 分鐘</option>
+              <option value="5m">5 分鐘</option>
+              <option value="15m" selected>15 分鐘</option>
+              <option value="30m">30 分鐘</option>
+              <option value="1h">60 分鐘</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="statusFilter">帳號狀態</label>
+            <select id="statusFilter">
+              <option value="all">全部</option>
+              <option value="traffic">有流量</option>
+              <option value="enabled">啟用</option>
+              <option value="disabled">停用</option>
+            </select>
+          </div>
+        </div>
+        <div class="sample-status" id="sampleStatus">正在讀取即時監看資料...</div>
+      </div>
+
+      <div class="summary-grid" aria-label="即時監看摘要">
+        <article class="summary-card">
+          <div class="summary-label">總請求</div>
+          <div class="summary-value" id="totalRequests">0</div>
+          <div class="summary-note" id="windowNote">15 分鐘視窗</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">每分鐘請求</div>
+          <div class="summary-value" id="totalRate">0</div>
+          <div class="summary-note">次/分</div>
+        </article>
+        <article class="summary-card">
+          <div class="summary-label">有流量帳號</div>
+          <div class="summary-value" id="activeAccounts">0</div>
+          <div class="summary-note" id="accountNote">共 0 個帳號</div>
+        </article>
+        <article class="summary-card high">
+          <div class="summary-label" id="lowYieldLabel">低輸出 ≤2%</div>
+          <div class="summary-value" id="lowRequests">0</div>
+          <div class="summary-note" id="lowShare">0%</div>
+        </article>
+        <article class="summary-card mid">
+          <div class="summary-label" id="midYieldLabel">中輸出 ≤20%</div>
+          <div class="summary-value" id="midRequests">0</div>
+          <div class="summary-note" id="midShare">0%</div>
+        </article>
+        <article class="summary-card low">
+          <div class="summary-label" id="highYieldLabel">高輸出 &gt;20%</div>
+          <div class="summary-value" id="highRequests">0</div>
+          <div class="summary-note" id="highShare">0%</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel panel-table">
+      <header class="table-heading">
+        <div class="table-title">帳號即時使用狀況</div>
+        <div class="table-tools">
+        <div class="column-menu-wrap">
+          <button class="icon-button" type="button" id="columnMenuButton" title="顯示欄位" aria-label="顯示欄位" aria-haspopup="true" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10"></path><circle cx="18" cy="19" r="2.4"></circle></svg>
+          </button>
+          <div class="column-menu" id="columnMenu" role="dialog" aria-label="顯示欄位" hidden>
+            <div class="column-menu-head">顯示欄位</div>
+            <div class="column-menu-list" id="columnMenuList"></div>
+            <button class="column-menu-reset" type="button" id="columnMenuReset">全部顯示</button>
+          </div>
+        </div>
+        <div class="pagination">
+          <button class="icon-button" type="button" id="prevPage" title="上一頁" aria-label="上一頁">
+            <svg viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <span class="page-status" id="pageStatus">1 / 1</span>
+          <button class="icon-button" type="button" id="nextPage" title="下一頁" aria-label="下一頁">
+            <svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"></path></svg>
+          </button>
+        </div>
+        </div>
+      </header>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-name" data-col="name"><button class="sort-button" type="button" data-sort="name">帳號 <span class="sort-mark" data-sort-mark="name"></span></button></th>
+              <th class="col-total" data-col="count"><button class="sort-button" type="button" data-sort="count">請求 <span class="sort-mark" data-sort-mark="count">↓</span></button></th>
+              <th class="col-rate" data-col="rate"><button class="sort-button" type="button" data-sort="perMinute">次/分 <span class="sort-mark" data-sort-mark="perMinute"></span></button></th>
+              <th class="col-cost" data-col="cost"><button class="sort-button" type="button" data-sort="tokensPerRequest">tok/次 <span class="sort-mark" data-sort-mark="tokensPerRequest"></span></button></th>
+              <th class="col-model" data-col="model"><button class="sort-button" type="button" data-sort="qualityTierAvg">模型等級 <span class="sort-mark" data-sort-mark="qualityTierAvg"></span></button></th>
+              <th class="col-yield" data-col="yield"><button class="sort-button" type="button" data-sort="outputRatio">輸出比 <span class="sort-mark" data-sort-mark="outputRatio"></span></button></th>
+              <th class="col-prose" data-col="prose"><button class="sort-button" type="button" data-sort="proseRatioMedian">文字比 <span class="sort-mark" data-sort-mark="proseRatioMedian"></span></button></th>
+              <th class="col-reason" data-col="reasoning"><button class="sort-button" type="button" data-sort="reasoningRatio">推理比 <span class="sort-mark" data-sort-mark="reasoningRatio"></span></button></th>
+              <th class="col-tier" data-col="yieldLow"><button class="sort-button" type="button" data-sort="yieldLow">低輸出 <span class="sort-mark" data-sort-mark="yieldLow"></span></button></th>
+              <th class="col-tier" data-col="yieldMid"><button class="sort-button" type="button" data-sort="yieldMid">中輸出 <span class="sort-mark" data-sort-mark="yieldMid"></span></button></th>
+              <th class="col-tier" data-col="yieldHigh"><button class="sort-button" type="button" data-sort="yieldHigh">高輸出 <span class="sort-mark" data-sort-mark="yieldHigh"></span></button></th>
+              <th class="col-tier" data-col="low"><button class="sort-button" type="button" data-sort="low">低需求 <span class="sort-mark" data-sort-mark="low"></span></button></th>
+              <th class="col-tier" data-col="mid"><button class="sort-button" type="button" data-sort="mid">中需求 <span class="sort-mark" data-sort-mark="mid"></span></button></th>
+              <th class="col-tier" data-col="high"><button class="sort-button" type="button" data-sort="high">高需求 <span class="sort-mark" data-sort-mark="high"></span></button></th>
+              <th class="col-last" data-col="last">最後請求</th>
+            </tr>
+          </thead>
+          <tbody id="usageRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div class="loading-mask" id="loadingMask" aria-live="polite">
+    <div class="loading-box"><div class="spinner"></div><span>正在讀取即時監看資料...</span></div>
+  </div>
+
+  <script>
+    "use strict";
+
+    const PAGE_SIZE = 20;
+    const REFRESH_SECONDS = 60;
+    const WINDOW_STORAGE_KEY = "lbp.usageDensity.window";
+    const STATUS_STORAGE_KEY = "lbp.usageDensity.status";
+    const COLUMN_STORAGE_KEY = "lbp.usageDensity.columns";
+
+    // 帳號欄是識別依據，不開放隱藏，所以不列在這裡。
+    const TOGGLEABLE_COLUMNS = [
+      { key: "count", label: "請求", minWidth: 90 },
+      { key: "rate", label: "次/分", minWidth: 90 },
+      { key: "cost", label: "tok/次", minWidth: 110 },
+      { key: "model", label: "模型等級", minWidth: 100 },
+      { key: "yield", label: "輸出比", minWidth: 110 },
+      { key: "prose", label: "文字比", minWidth: 100 },
+      { key: "reasoning", label: "推理比", minWidth: 100 },
+      { key: "yieldLow", label: "低輸出", minWidth: 150 },
+      { key: "yieldMid", label: "中輸出", minWidth: 150 },
+      { key: "yieldHigh", label: "高輸出", minWidth: 150 },
+      { key: "low", label: "低需求（複雜度）", minWidth: 150 },
+      { key: "mid", label: "中需求（複雜度）", minWidth: 150 },
+      { key: "high", label: "高需求（複雜度）", minWidth: 150 },
+      { key: "last", label: "最後請求", minWidth: 100 }
+    ];
+    const NAME_COLUMN_MIN_WIDTH = 150;
+
+    // 複雜度分級是請求送出「前」算的，量的其實是 prompt 大小；
+    // 長 context 的流量會全部擠在同一格，因此預設收起，需要時可從選單開啟。
+    const DEFAULT_HIDDEN_COLUMNS = ["low", "mid", "high"];
+
+    // localStorage 在沙箱 iframe 或 data: URL 下存取就會拋例外，
+    // 包起來讓設定失效時只是不持久，而不是整頁掛掉。
+    function readStored(key) {
+      try { return window.localStorage.getItem(key); } catch (_) { return null; }
+    }
+
+    function writeStored(key, value) {
+      try { window.localStorage.setItem(key, value); } catch (_) { /* 無痕模式等情境，忽略 */ }
+    }
+    const state = {
+      keys: [],
+      windowSeconds: 300,
+      totalRequests: 0,
+      yieldThresholds: { lowMaxPercent: 2, midMaxPercent: 20 },
+      page: 1,
+      sortKey: "count",
+      sortDirection: "desc",
+      countdown: REFRESH_SECONDS,
+      lastLoadedAt: 0,
+      loading: false,
+      hiddenColumns: new Set()
+    };
+
+    const elements = {
+      refreshButton: document.getElementById("refreshButton"),
+      refreshNote: document.getElementById("refreshNote"),
+      windowSelect: document.getElementById("windowSelect"),
+      statusFilter: document.getElementById("statusFilter"),
+      sampleStatus: document.getElementById("sampleStatus"),
+      totalRequests: document.getElementById("totalRequests"),
+      totalRate: document.getElementById("totalRate"),
+      activeAccounts: document.getElementById("activeAccounts"),
+      accountNote: document.getElementById("accountNote"),
+      lowRequests: document.getElementById("lowRequests"),
+      midRequests: document.getElementById("midRequests"),
+      highRequests: document.getElementById("highRequests"),
+      lowYieldLabel: document.getElementById("lowYieldLabel"),
+      midYieldLabel: document.getElementById("midYieldLabel"),
+      highYieldLabel: document.getElementById("highYieldLabel"),
+      lowShare: document.getElementById("lowShare"),
+      midShare: document.getElementById("midShare"),
+      highShare: document.getElementById("highShare"),
+      windowNote: document.getElementById("windowNote"),
+      usageRows: document.getElementById("usageRows"),
+      prevPage: document.getElementById("prevPage"),
+      nextPage: document.getElementById("nextPage"),
+      pageStatus: document.getElementById("pageStatus"),
+      columnMenuButton: document.getElementById("columnMenuButton"),
+      columnMenu: document.getElementById("columnMenu"),
+      columnMenuList: document.getElementById("columnMenuList"),
+      columnMenuReset: document.getElementById("columnMenuReset"),
+      densityTable: document.querySelector(".table-wrap table"),
+      errorBanner: document.getElementById("errorBanner"),
+      loadingMask: document.getElementById("loadingMask")
+    };
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function number(value) {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function normalizeTier(value) {
+      return {
+        count: Math.max(0, Math.trunc(number(value?.count))),
+        perMinute: Math.max(0, number(value?.per_minute)),
+        share: Math.min(1, Math.max(0, number(value?.share))),
+        tokens: Math.max(0, Math.trunc(number(value?.tokens))),
+        tokensPerRequest: Math.max(0, number(value?.tokens_per_request))
+      };
+    }
+
+    function normalizeKey(value) {
+      return {
+        name: String(value?.name || "(未命名)"),
+        keyType: String(value?.key_type || ""),
+        enabled: Boolean(value?.enabled),
+        count: Math.max(0, Math.trunc(number(value?.count))),
+        perMinute: Math.max(0, number(value?.per_minute)),
+        completedRequests: Math.max(0, Math.trunc(number(value?.completed_requests))),
+        tokens: Math.max(0, Math.trunc(number(value?.tokens))),
+        tokensPerMinute: Math.max(0, number(value?.tokens_per_minute)),
+        tokensPerRequest: Math.max(0, number(value?.tokens_per_request)),
+        promptTokens: Math.max(0, Math.trunc(number(value?.prompt_tokens))),
+        qualityTierAvg: Math.max(0, number(value?.quality_tier_avg)),
+        outputRatio: Math.max(0, number(value?.output_ratio)),
+        outputRatioMedian: Math.max(0, number(value?.output_ratio_median)),
+        proseRatio: Math.max(0, number(value?.prose_ratio)),
+        proseRatioMedian: Math.max(0, number(value?.prose_ratio_median)),
+        proseSamples: Math.max(0, Math.trunc(number(value?.prose_samples))),
+        reasoningTokens: Math.max(0, Math.trunc(number(value?.reasoning_tokens))),
+        reasoningRatio: Math.max(0, number(value?.reasoning_ratio)),
+        toolCallsPerRequest: Math.max(0, number(value?.tool_calls_per_request)),
+        yieldLow: normalizeTier(value?.yield_low),
+        yieldMid: normalizeTier(value?.yield_mid),
+        yieldHigh: normalizeTier(value?.yield_high),
+        low: normalizeTier(value?.low),
+        mid: normalizeTier(value?.mid),
+        high: normalizeTier(value?.high),
+        firstAt: String(value?.first_at || ""),
+        lastAt: String(value?.last_at || ""),
+        truncated: Boolean(value?.truncated)
+      };
+    }
+
+    async function apiFetch(path) {
+      const response = await fetch(path, { credentials: "same-origin", cache: "no-store" });
+      if (response.status === 401) {
+        window.parent?.postMessage({ type: "lbp-session-expired" }, window.location.origin);
+      }
+      let payload = null;
+      try { payload = await response.json(); } catch (_) {}
+      if (!response.ok) {
+        throw new Error(payload?.error?.message || payload?.message || `HTTP ${response.status}`);
+      }
+      return payload || {};
+    }
+
+    function showError(message) {
+      elements.errorBanner.textContent = message || "無法載入即時監看資料。";
+      elements.errorBanner.classList.add("visible");
+    }
+
+    function clearError() {
+      elements.errorBanner.textContent = "";
+      elements.errorBanner.classList.remove("visible");
+    }
+
+    function setLoading(loading, initial) {
+      state.loading = loading;
+      elements.refreshButton.disabled = loading;
+      elements.refreshButton.classList.toggle("loading", loading);
+      elements.loadingMask.classList.toggle("visible", loading && initial);
+    }
+
+    function formatCount(value) {
+      return Math.trunc(number(value)).toLocaleString(window.LBPI18n?.locale() || "zh-TW");
+    }
+
+    function formatRate(value) {
+      const rate = number(value);
+      return rate >= 100 ? rate.toFixed(0) : rate.toFixed(rate >= 10 ? 1 : 2);
+    }
+
+    // 輸入量動輒數百萬，完整位數會把欄位撐爆，副標一律用縮寫。
+    function formatCompactTokens(value) {
+      const amount = Math.max(0, Math.trunc(number(value)));
+      if (amount >= 1000000) return `${(amount / 1000000).toFixed(1)}M`;
+      if (amount >= 10000) return `${Math.round(amount / 1000)}k`;
+      return formatCount(amount);
+    }
+
+    function formatShare(value) {
+      return `${(number(value) * 100).toFixed(1)}%`;
+    }
+
+    function formatThresholdPercent(value) {
+      const amount = number(value);
+      return Number.isInteger(amount) ? String(amount) : amount.toFixed(1);
+    }
+
+    // 觀察視窗最長只有 1 小時，日期一定是今天，顯示出來只是佔欄寬。
+    function formatDateTime(value) {
+      if (!value) return "-";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "-";
+      return date.toLocaleTimeString(window.LBPI18n?.locale() || "zh-TW", { hour12: false });
+    }
+
+    function keyTypeLabel(value) {
+      switch (String(value).toLowerCase()) {
+        case "chat": return "API 金鑰";
+        case "mcp": return "MCP 金鑰";
+        case "login": return "登入金鑰";
+        default: return value || "未分類";
+      }
+    }
+
+    // 只存「被隱藏的欄位」而不是「顯示的欄位」：日後新增欄位時，
+    // 舊的設定不會把新欄位一起藏起來。
+    function hiddenColumns() {
+      const raw = readStored(COLUMN_STORAGE_KEY);
+      if (!raw) return new Set(DEFAULT_HIDDEN_COLUMNS);
+      try {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return new Set();
+        const valid = TOGGLEABLE_COLUMNS.map(column => column.key);
+        return new Set(parsed.filter(key => valid.includes(key)));
+      } catch (_) {
+        return new Set();
+      }
+    }
+
+    function storeHiddenColumns(hidden) {
+      writeStored(COLUMN_STORAGE_KEY, JSON.stringify([...hidden]));
+    }
+
+    // 每次重繪都要呼叫：資料列是整批換掉的，新建的儲存格不帶隱藏狀態。
+    function applyHiddenCells() {
+      document.querySelectorAll("[data-col]").forEach(cell => {
+        cell.hidden = state.hiddenColumns.has(cell.dataset.col);
+      });
+    }
+
+    function applyColumnVisibility() {
+      // 隱藏欄位後表格該跟著變窄，否則橫向捲軸不會消失。
+      const width = TOGGLEABLE_COLUMNS.reduce(
+        (total, column) => total + (state.hiddenColumns.has(column.key) ? 0 : column.minWidth),
+        NAME_COLUMN_MIN_WIDTH
+      );
+      elements.densityTable.style.minWidth = `${width}px`;
+      renderTable();
+    }
+
+    function visibleColumnCount() {
+      return 1 + TOGGLEABLE_COLUMNS.filter(column => !state.hiddenColumns.has(column.key)).length;
+    }
+
+    function renderColumnMenu() {
+      elements.columnMenuList.innerHTML = TOGGLEABLE_COLUMNS.map(column => `
+        <label class="column-menu-item">
+          <input type="checkbox" data-column="${column.key}" ${state.hiddenColumns.has(column.key) ? "" : "checked"}>
+          <span>${escapeHtml(column.label)}</span>
+        </label>`).join("");
+    }
+
+    function setColumnMenuOpen(open) {
+      elements.columnMenu.hidden = !open;
+      elements.columnMenuButton.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+
+    function restoreSelections() {
+      const savedWindow = readStored(WINDOW_STORAGE_KEY);
+      const savedStatus = readStored(STATUS_STORAGE_KEY);
+      if (savedWindow && [...elements.windowSelect.options].some(option => option.value === savedWindow)) {
+        elements.windowSelect.value = savedWindow;
+      }
+      if (savedStatus && [...elements.statusFilter.options].some(option => option.value === savedStatus)) {
+        elements.statusFilter.value = savedStatus;
+      }
+    }
+
+    // costCell 顯示每筆完成請求的平均消耗。它是分辨「單筆很重」與
+    // 「單筆很輕但打很多次」的依據 —— 兩者的總消耗可能幾乎一樣。
+    function costCell(key) {
+      if (key.completedRequests <= 0) {
+        return `<span class="cost-pending">—</span><span class="cost-total">尚無完成請求</span>`;
+      }
+      return `<span class="number">${formatCount(key.tokensPerRequest)}</span><span class="cost-total">共 ${formatCompactTokens(key.tokens)}</span>`;
+    }
+
+    // 模型等級沿用設定裡的 quality_tier（大=8 中=6 小=4 極小=2），
+    // 以請求數加權平均；混用不同等級時會落在中間值。
+    function modelScaleLabel(tier) {
+      if (tier >= 7) return "大";
+      if (tier >= 5) return "中";
+      if (tier >= 3) return "小";
+      return "極小";
+    }
+
+    function modelCell(key) {
+      if (key.qualityTierAvg <= 0) {
+        return `<span class="cost-pending">—</span>`;
+      }
+      return `<span class="number">${key.qualityTierAvg.toFixed(1)}</span><span class="model-label">${modelScaleLabel(key.qualityTierAvg)}</span>`;
+    }
+
+    // 輸出比 ＝ 完成 token / 輸入 token。無因次，不隨任務類型漂移。
+    // 極低的輸出比搭配高模型等級，代表拿高階模型在跑不需要大量輸出的操作。
+    function formatRatioPercent(ratio) {
+      const percent = Math.max(0, number(ratio)) * 100;
+      if (percent >= 10) return `${percent.toFixed(0)}%`;
+      return `${percent.toFixed(percent >= 1 ? 1 : 2)}%`;
+    }
+
+    // 主數字用中位數：Σ輸出/Σ輸入 是 token 加權的，單一超大 context 的請求
+    // 就能把整支金鑰的比值拖低，看不出多數對話的樣子。總和放在副標備查。
+    function yieldCell(key) {
+      if (key.promptTokens <= 0) {
+        return `<span class="cost-pending">—</span>`;
+      }
+      return `<span class="number">${formatRatioPercent(key.outputRatioMedian)}</span><span class="model-label">總和 ${formatRatioPercent(key.outputRatio)}</span>`;
+    }
+
+    // 文字比 ＝ 給人看的文字 / 總輸出（文字＋推理＋工具呼叫參數）。
+    // 只發工具呼叫的 turn 會是 0，而且完全不依賴工具名稱，任何客戶端都適用。
+    // 非串流回應拆不出用途，那些請求不列入這個統計。
+    function proseCell(key) {
+      // 沒有樣本時比例會是 0，不能顯示成 0% —— 那和「真的沒有產出文字」是兩回事。
+      if (key.proseSamples <= 0) {
+        return `<span class="cost-pending">—</span><span class="model-label">無分類樣本</span>`;
+      }
+      const tools = key.toolCallsPerRequest > 0
+        ? `${formatRate(key.toolCallsPerRequest)} 工具/次`
+        : "無工具呼叫";
+      return `<span class="number">${formatRatioPercent(key.proseRatioMedian)}</span><span class="model-label">總和 ${formatRatioPercent(key.proseRatio)} · ${tools}</span>`;
+    }
+
+    // 推理比 ＝ 上游回報的 reasoning_tokens / 實際輸出。用的是精確值而非字元估算 ——
+    // provider 多半不串流推理內容，估算會少掉絕大部分。
+    // 推理在計費上就是輸出，已經含在「輸出比」的分子裡；這一欄只是把它拆出來看。
+    function reasoningCell(key) {
+      if (key.completedRequests <= 0) {
+        return `<span class="cost-pending">—</span>`;
+      }
+      if (key.reasoningTokens <= 0) {
+        return `<span class="cost-pending">—</span><span class="model-label">未回報</span>`;
+      }
+      return `<span class="number">${formatRatioPercent(key.reasoningRatio)}</span><span class="model-label">共 ${formatCompactTokens(key.reasoningTokens)}</span>`;
+    }
+
+    function tierCell(tier, className) {
+      const width = Math.max(0, Math.min(100, tier.share * 100));
+      return `
+        <div class="tier-cell ${className}">
+          <div class="tier-main"><span class="tier-count">${formatCount(tier.count)}</span><span class="tier-share">${formatShare(tier.share)}</span></div>
+          <div class="tier-track"><span class="tier-fill" style="width:${width}%"></span></div>
+          <div class="tier-foot">
+            <span class="tier-rate">${formatRate(tier.perMinute)} 次/分</span>
+            <span class="tier-cost">${tier.tokensPerRequest > 0 ? `${formatCount(tier.tokensPerRequest)} tok/次` : "—"}</span>
+          </div>
+        </div>`;
+    }
+
+    function filteredKeys() {
+      const filter = elements.statusFilter.value;
+      return state.keys.filter(key => {
+        if (filter === "traffic") return key.count > 0;
+        if (filter === "enabled") return key.enabled;
+        if (filter === "disabled") return !key.enabled;
+        return true;
+      });
+    }
+
+    function sortValue(key, sortKey) {
+      if (sortKey === "name") return key.name.toLocaleLowerCase();
+      if (["low", "mid", "high", "yieldLow", "yieldMid", "yieldHigh"].includes(sortKey)) return key[sortKey].count;
+      return number(key[sortKey]);
+    }
+
+    function sortedKeys() {
+      const direction = state.sortDirection === "asc" ? 1 : -1;
+      return filteredKeys().sort((left, right) => {
+        const leftValue = sortValue(left, state.sortKey);
+        const rightValue = sortValue(right, state.sortKey);
+        if (typeof leftValue === "string") {
+          const compared = leftValue.localeCompare(rightValue, window.LBPI18n?.locale() || "zh-TW");
+          if (compared) return compared * direction;
+        } else if (leftValue !== rightValue) {
+          return (leftValue - rightValue) * direction;
+        }
+        return left.name.localeCompare(right.name, window.LBPI18n?.locale() || "zh-TW");
+      });
+    }
+
+    function renderSummary() {
+      const totals = state.keys.reduce((result, key) => {
+        result.low += key.yieldLow.count;
+        result.mid += key.yieldMid.count;
+        result.high += key.yieldHigh.count;
+        result.rate += key.perMinute;
+        if (key.count > 0) result.active += 1;
+        return result;
+      }, { low: 0, mid: 0, high: 0, rate: 0, active: 0 });
+      // 輸出比分級只涵蓋已完成的請求，不能拿它當「總請求」的替代值。
+      const total = totals.low + totals.mid + totals.high;
+      elements.totalRequests.textContent = formatCount(state.totalRequests);
+      elements.totalRate.textContent = formatRate(totals.rate);
+      elements.activeAccounts.textContent = formatCount(totals.active);
+      elements.accountNote.textContent = `共 ${formatCount(state.keys.length)} 個帳號`;
+      elements.lowRequests.textContent = formatCount(totals.low);
+      elements.midRequests.textContent = formatCount(totals.mid);
+      elements.highRequests.textContent = formatCount(totals.high);
+      elements.lowShare.textContent = total ? `${(totals.low / total * 100).toFixed(1)}%` : "0%";
+      elements.midShare.textContent = total ? `${(totals.mid / total * 100).toFixed(1)}%` : "0%";
+      elements.highShare.textContent = total ? `${(totals.high / total * 100).toFixed(1)}%` : "0%";
+      elements.windowNote.textContent = `${Math.round(state.windowSeconds / 60)} 分鐘視窗`;
+      const lowMax = formatThresholdPercent(state.yieldThresholds.lowMaxPercent);
+      const midMax = formatThresholdPercent(state.yieldThresholds.midMaxPercent);
+      const translate = value => window.LBPI18n?.t(value) || value;
+      elements.lowYieldLabel.textContent = `${translate("低輸出")} ≤${lowMax}%`;
+      elements.midYieldLabel.textContent = `${translate("中輸出")} ≤${midMax}%`;
+      elements.highYieldLabel.textContent = `${translate("高輸出")} >${midMax}%`;
+    }
+
+    function renderSortMarks() {
+      document.querySelectorAll("[data-sort-mark]").forEach(mark => {
+        mark.textContent = mark.dataset.sortMark === state.sortKey
+          ? (state.sortDirection === "asc" ? "↑" : "↓")
+          : "";
+      });
+    }
+
+    function renderTable() {
+      const keys = sortedKeys();
+      const totalPages = Math.max(1, Math.ceil(keys.length / PAGE_SIZE));
+      state.page = Math.min(Math.max(1, state.page), totalPages);
+      const start = (state.page - 1) * PAGE_SIZE;
+      const pageKeys = keys.slice(start, start + PAGE_SIZE);
+
+      elements.pageStatus.textContent = `${state.page} / ${totalPages}`;
+      elements.prevPage.disabled = state.page <= 1;
+      elements.nextPage.disabled = state.page >= totalPages;
+      renderSortMarks();
+
+      if (!pageKeys.length) {
+        elements.usageRows.innerHTML = `<tr><td colspan="${visibleColumnCount()}"><div class="empty">目前沒有符合條件的帳號。</div></td></tr>`;
+        applyHiddenCells();
+        return;
+      }
+
+      elements.usageRows.innerHTML = pageKeys.map(key => `
+        <tr>
+          <td data-col="name"><span class="account-name">${escapeHtml(key.name)}</span><span class="account-type">${escapeHtml(keyTypeLabel(key.keyType))}</span></td>
+          <td data-col="count"><span class="number">${formatCount(key.count)}</span>${key.truncated ? `<span class="truncated">樣本已截斷</span>` : ""}</td>
+          <td data-col="rate"><span class="number">${formatRate(key.perMinute)}</span></td>
+          <td data-col="cost">${costCell(key)}</td>
+          <td data-col="model">${modelCell(key)}</td>
+          <td data-col="yield">${yieldCell(key)}</td>
+          <td data-col="prose">${proseCell(key)}</td>
+          <td data-col="reasoning">${reasoningCell(key)}</td>
+          <td data-col="yieldLow">${tierCell(key.yieldLow, "high")}</td>
+          <td data-col="yieldMid">${tierCell(key.yieldMid, "mid")}</td>
+          <td data-col="yieldHigh">${tierCell(key.yieldHigh, "low")}</td>
+          <td data-col="low">${tierCell(key.low, "low")}</td>
+          <td data-col="mid">${tierCell(key.mid, "mid")}</td>
+          <td data-col="high">${tierCell(key.high, "high")}</td>
+          <td data-col="last"><span class="last-time">${escapeHtml(formatDateTime(key.lastAt))}</span></td>
+        </tr>`).join("");
+      applyHiddenCells();
+    }
+
+    function render() {
+      renderSummary();
+      renderTable();
+      const updated = state.lastLoadedAt
+        ? new Date(state.lastLoadedAt).toLocaleTimeString(window.LBPI18n?.locale() || "zh-TW", { hour12: false })
+        : "-";
+      elements.sampleStatus.textContent = `更新時間 ${updated} · ${formatCount(state.keys.length)} 個帳號`;
+    }
+
+    async function loadDensity(options = {}) {
+      if (state.loading) return;
+      const initial = state.lastLoadedAt === 0 && options.silent !== true;
+      setLoading(true, initial);
+      clearError();
+      try {
+        const windowValue = encodeURIComponent(elements.windowSelect.value || "15m");
+        const payload = await apiFetch(`api/api-keys/density?window=${windowValue}`);
+        state.keys = Array.isArray(payload.keys) ? payload.keys.map(normalizeKey) : [];
+        state.windowSeconds = Math.max(1, number(payload.window_seconds) || 900);
+        state.totalRequests = Math.max(0, Math.trunc(number(payload.total_requests)));
+        const lowMaxPercent = number(payload.yield_thresholds?.low_max_percent);
+        const midMaxPercent = number(payload.yield_thresholds?.mid_max_percent);
+        state.yieldThresholds = lowMaxPercent >= 0 && midMaxPercent > lowMaxPercent
+          ? { lowMaxPercent, midMaxPercent }
+          : { lowMaxPercent: 2, midMaxPercent: 20 };
+        state.lastLoadedAt = Date.now();
+        state.countdown = REFRESH_SECONDS;
+        render();
+      } catch (error) {
+        showError(error.message || "無法載入即時監看資料。");
+        elements.sampleStatus.textContent = "即時監看資料載入失敗";
+      } finally {
+        setLoading(false, false);
+      }
+    }
+
+    function updateRefreshNote() {
+      elements.refreshNote.textContent = state.lastLoadedAt
+        ? `${state.countdown} 秒後更新`
+        : "尚未更新";
+    }
+
+    elements.refreshButton.addEventListener("click", () => loadDensity());
+
+    elements.columnMenuButton.addEventListener("click", event => {
+      event.stopPropagation();
+      setColumnMenuOpen(elements.columnMenu.hidden);
+    });
+
+    elements.columnMenu.addEventListener("click", event => event.stopPropagation());
+
+    elements.columnMenuList.addEventListener("change", event => {
+      const column = event.target?.dataset?.column;
+      if (!column) return;
+      if (event.target.checked) {
+        state.hiddenColumns.delete(column);
+      } else {
+        state.hiddenColumns.add(column);
+      }
+      storeHiddenColumns(state.hiddenColumns);
+      applyColumnVisibility();
+    });
+
+    elements.columnMenuReset.addEventListener("click", () => {
+      state.hiddenColumns.clear();
+      storeHiddenColumns(state.hiddenColumns);
+      renderColumnMenu();
+      applyColumnVisibility();
+    });
+
+    document.addEventListener("click", () => setColumnMenuOpen(false));
+    document.addEventListener("keydown", event => {
+      if (event.key !== "Escape" || elements.columnMenu.hidden) return;
+      setColumnMenuOpen(false);
+      elements.columnMenuButton.focus();
+    });
+    elements.windowSelect.addEventListener("change", () => {
+      writeStored(WINDOW_STORAGE_KEY, elements.windowSelect.value);
+      state.page = 1;
+      loadDensity();
+    });
+    elements.statusFilter.addEventListener("change", () => {
+      writeStored(STATUS_STORAGE_KEY, elements.statusFilter.value);
+      state.page = 1;
+      renderTable();
+    });
+    elements.prevPage.addEventListener("click", () => {
+      state.page -= 1;
+      renderTable();
+    });
+    elements.nextPage.addEventListener("click", () => {
+      state.page += 1;
+      renderTable();
+    });
+    document.querySelectorAll("[data-sort]").forEach(button => {
+      button.addEventListener("click", () => {
+        const key = button.dataset.sort;
+        if (state.sortKey === key) {
+          state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+        } else {
+          state.sortKey = key;
+          state.sortDirection = key === "name" ? "asc" : "desc";
+        }
+        state.page = 1;
+        renderTable();
+      });
+    });
+
+    window.addEventListener("lbp-language-change", render);
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && Date.now() - state.lastLoadedAt >= REFRESH_SECONDS * 1000) {
+        loadDensity({ silent: true });
+      }
+    });
+    window.setInterval(() => {
+      if (document.hidden || state.loading) return;
+      state.countdown = Math.max(0, state.countdown - 1);
+      updateRefreshNote();
+      if (state.countdown === 0) loadDensity({ silent: true });
+    }, 1000);
+
+    restoreSelections();
+    state.hiddenColumns = hiddenColumns();
+    renderColumnMenu();
+    applyColumnVisibility();
+    updateRefreshNote();
+    loadDensity();
+  </script>
+</body>
+</html>

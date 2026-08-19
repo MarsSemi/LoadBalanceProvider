@@ -201,6 +201,7 @@ verify_archive_file() {
 
 verify_archive_file "website/main.html" "website/main.html"
 verify_archive_file "website/system-monitor.html" "website/system-monitor.html"
+verify_archive_file "website/usage-density.html" "website/usage-density.html"
 verify_archive_file "run_bg.sh" "run_bg.sh"
 verify_archive_file "stop.sh" "stop.sh"
 
@@ -209,6 +210,7 @@ for required_path in \
   "build-info.json" \
   "website/main.html" \
   "website/system-monitor.html" \
+  "website/usage-density.html" \
   "run_bg.sh" \
   "stop.sh" \
   "bin/${MAC_BIN_NAME}" \

@@ -31,6 +31,12 @@ type LoadBalancer struct {
 	Analyzer  *analyzer.RequestAnalyzer
 	Cache     *classifier.Cache
 	Providers []*ProviderRuntime
+
+	// 對話綁定數快照。實際資料在 proxy 層（proxy 依賴 balancer，不能反向匯入），
+	// 因此由 API 層在選擇前寫入。
+	_bindingLock  sync.RWMutex
+	_bindings     map[string]int
+	_bindingLimit int
 }
 
 // -------------------------------------------------------------------------------------
@@ -170,6 +176,33 @@ func NewLoadBalancer(_config *domain.ProxyConfig) *LoadBalancer {
 		Cache:     classifier.NewCache(1000),
 		Providers: _providers,
 	}
+}
+
+// -------------------------------------------------------------------------------------
+// SetConversationBindings 更新各 provider 目前的對話綁定數與上限。
+// _limit <= 0 代表不啟用上限。
+func (_b *LoadBalancer) SetConversationBindings(_counts map[string]int, _limit int) {
+	if _b == nil {
+		return
+	}
+	_b._bindingLock.Lock()
+	defer _b._bindingLock.Unlock()
+	_b._bindings = _counts
+	_b._bindingLimit = _limit
+}
+
+// -------------------------------------------------------------------------------------
+// providerAtBindingCap 回報該 provider 是否已達對話綁定上限。
+func (_b *LoadBalancer) providerAtBindingCap(_providerID string) bool {
+	if _b == nil {
+		return false
+	}
+	_b._bindingLock.RLock()
+	defer _b._bindingLock.RUnlock()
+	if _b._bindingLimit <= 0 || len(_b._bindings) == 0 {
+		return false
+	}
+	return _b._bindings[_providerID] >= _b._bindingLimit
 }
 
 // -------------------------------------------------------------------------------------
@@ -369,6 +402,15 @@ func (_b *LoadBalancer) classifierProviderConfig() (domain.LLMProviderConfig, bo
 // -------------------------------------------------------------------------------------
 func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _profile domain.RequestProfile, _requestedModel string, _excludedProviderIDs map[string]bool) []ProviderSelection {
 	_candidates := make([]ProviderSelection, 0)
+	// 已達對話綁定上限的 provider 先放旁邊：只有在完全沒有其他候選時才動用，
+	// 避免上限把請求逼成「沒有可用 provider」。
+	_atCap := make([]ProviderSelection, 0)
+	// 超過等級上限的候選同樣先放旁邊：降級是政策，不該讓請求變成無 provider 可用。
+	// 沒有任何符合上限的模型時，寧可放行到較高等級，也不要回 503。
+	_overTier := make([]ProviderSelection, 0)
+	// 明確指定 provider 的請求（對話黏著或金鑰強制路由）不受上限影響，
+	// 否則既有對話會直接失去唯一的候選。
+	_pinned := strings.TrimSpace(_req.ProviderID) != "" || strings.TrimSpace(_req.Provider) != ""
 	_now := time.Now()
 	for _, _provider := range _b.Providers {
 		if _provider == nil || _provider.Config == nil {
@@ -413,14 +455,30 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 			}
 
 			_score := _b.scoreCandidate(_provider, _model, _profile, _requestedModel)
-			_candidates = append(_candidates, ProviderSelection{
+			_selection := ProviderSelection{
 				Provider: _provider,
 				Model:    _model,
 				Score:    _score,
-			})
+			}
+			// 等級上限先於綁定上限判斷，_atCap 裡才不會混進超過上限的模型。
+			if _req.MaxQualityTier > 0 && _model.QualityTier > _req.MaxQualityTier {
+				_overTier = append(_overTier, _selection)
+				continue
+			}
+			if !_pinned && _b.providerAtBindingCap(_provider.Config.ID) {
+				_atCap = append(_atCap, _selection)
+				continue
+			}
+			_candidates = append(_candidates, _selection)
 		}
 	}
 
+	if len(_candidates) == 0 {
+		if len(_atCap) > 0 {
+			return _atCap
+		}
+		return _overTier
+	}
 	return _candidates
 }
 
@@ -472,6 +530,7 @@ func candidateModels(_provider *domain.LLMProviderConfig, _requestedModel string
 			_passthroughModel := _models[_idx]
 			_passthroughModel.Name = strings.TrimSpace(_requestedModel)
 			_passthroughModel.Aliases = append([]string{_models[_idx].Name}, _passthroughModel.Aliases...)
+			_passthroughModel.QualityTier = explicitModelQualityTier(_provider, _passthroughModel.Name, _passthroughModel.QualityTier)
 			return []domain.LLMModelConfig{_passthroughModel}
 		}
 		if !providerAllowsExplicitModelPassthrough(_provider) {
@@ -492,6 +551,7 @@ func candidateModels(_provider *domain.LLMProviderConfig, _requestedModel string
 			_passthroughModel.Name = strings.TrimSpace(_requestedModel)
 			_passthroughModel.Aliases = append([]string{strings.TrimSpace(_requestedModel)}, _passthroughModel.Aliases...)
 		}
+		_passthroughModel.QualityTier = explicitModelQualityTier(_provider, _passthroughModel.Name, _passthroughModel.QualityTier)
 		return []domain.LLMModelConfig{_passthroughModel}
 	}
 
@@ -505,6 +565,29 @@ func providerAllowsExplicitModelPassthrough(_provider *domain.LLMProviderConfig)
 	}
 	return strings.EqualFold(strings.TrimSpace(_provider.Kind), "openai-codex") ||
 		strings.EqualFold(strings.TrimSpace(_provider.Type), "openai-codex")
+}
+
+// -------------------------------------------------------------------------------------
+// explicitModelQualityTier 讓 Codex 的實際模型變體決定監看等級。
+// Provider 只保存一個主模型，其他 API 模型是 aliases；若直接沿用主模型等級，
+// Luna／Terra 這類較低階變體就會被誤記成 Sol 的大模型等級。
+func explicitModelQualityTier(_provider *domain.LLMProviderConfig, _modelName string, _fallback int) int {
+	if !providerAllowsExplicitModelPassthrough(_provider) {
+		return _fallback
+	}
+
+	_normalized := strings.ToLower(strings.TrimSpace(_modelName))
+	_normalized = strings.NewReplacer("_", "-", " ", "-").Replace(_normalized)
+	switch {
+	case strings.HasSuffix(_normalized, "-sol"):
+		return 8
+	case strings.HasSuffix(_normalized, "-terra"):
+		return 6
+	case strings.HasSuffix(_normalized, "-luna"):
+		return 4
+	default:
+		return _fallback
+	}
 }
 
 // -------------------------------------------------------------------------------------

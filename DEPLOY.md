@@ -4,7 +4,7 @@
 
 ## 設定檔
 
-服務啟動時會讀取專案根目錄的 `agent.properties` 與 `data/llm_proxy.json`。`agent.properties` 保留 MarsCloud 基本設定，LLM Provider 與負載平衡設定集中放在 `data/llm_proxy.json`。
+服務啟動時會讀取專案根目錄的 `agent.properties`、`data/llm_proxy.json` 與 `data/advanced_settings.json`。`agent.properties` 保留 MarsCloud 基本設定，LLM Provider 與負載平衡設定集中放在 `data/llm_proxy.json`；進階路由、輸出比分級與低推理降級設定保存在 `data/advanced_settings.json`。
 
 | 參數 | 說明 |
 | :--- | :--- |
@@ -23,6 +23,12 @@
 | `models[].capabilities` | 模型適合的任務類型，例如 `chat`、`reasoning`、`coding`、`summarization`。 |
 | `models[].cost_tier` | 成本級距，數值越高代表越昂貴。 |
 | `models[].quality_tier` | 品質級距，數值越高代表越適合高複雜度任務。 |
+
+### 低推理降級
+
+管理介面的「設定 > 進階 > 低推理降級」使用每支 API 金鑰最近 `15` 分鐘的密度與完成輸出進行評估。預設關閉；預設條件為跨啟用 Provider 的當日平均配額消耗達 `18%`、金鑰頻率 `≥8 req/min`、推理比 `<10%`，且至少有 `5` 筆上游回報推理量的完成樣本。成立後套用品質等級上限 `4`，預設維持 `10` 分鐘。
+
+需注意：這個機制設定的是候選模型品質上限，不會覆寫明確指定模型或金鑰強制 Provider。若沒有符合上限的候選，負載平衡器會 fail-open 使用較高等級模型。降級狀態只保存在記憶體，設定更新或服務重啟會清除。
 
 ## 部署步驟
 
@@ -58,6 +64,9 @@
 ```http
 GET /api/health
 GET /api/providers
+GET /api/api-keys/density?window=15m
 ```
 
 `/api/providers` 可查看目前各 Provider 的 active request、成功次數、失敗次數與模型設定摘要。
+
+`/api/api-keys/density` 是管理端即時監看端點，需使用有效的 Web 登入 Session；一般 API 金鑰與 MCP 金鑰不能存取。`window` 可使用秒數或 `1m`、`5m`、`15m`、`30m`、`1h`，最大觀察範圍為一小時。回應除了請求頻率與複雜度外，也包含 `prompt_tokens`、`quality_tier_avg`、輸出比 `output_ratio`／`output_ratio_median`、正文比 `prose_ratio`／`prose_ratio_median`／`prose_samples`、推理量 `reasoning_tokens`／`reasoning_ratio`、工具呼叫與輪次、續接與重複任務，以及 `yield_low`／`yield_mid`／`yield_high` 分布和目前套用的 `yield_thresholds`。輸出比以實際完成輸出 Token ÷ 估算輸入 Token 計算，預設分級門檻為 `≤2%`、`>2% 且 ≤20%`、`>20%`，可從管理介面的進階設定調整。舊版 `os_tool_ratio`、`tool_type_counts` 與 OS 工具分類已移除。最近逐筆樣本僅保存在記憶體，服務重啟後會重新累積；月次永久統計不受影響。

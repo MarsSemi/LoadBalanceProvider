@@ -610,3 +610,13 @@ func hashAPIKey(_key string) string {
 	_hash := sha256.Sum256([]byte(_key))
 	return hex.EncodeToString(_hash[:])
 }
+
+// -------------------------------------------------------------------------------------
+// SetDefaultStoreForTest 替換預設 Store，回傳原本的值供測試還原。
+func SetDefaultStoreForTest(_store *APIKeyStore) *APIKeyStore {
+	_previous := _defaultStore
+	if _store != nil {
+		_defaultStore = _store
+	}
+	return _previous
+}

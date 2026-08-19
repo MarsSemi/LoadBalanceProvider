@@ -86,8 +86,33 @@ func TestExplicitUnknownModelKeepsProviderCandidatesAndPassesThrough(t *testing.
 	if _selected == nil || _model == nil || _model.Name != "gpt-5.6-luna" {
 		t.Fatalf("explicit model was not passed through: provider=%v model=%v", _selected, _model)
 	}
+	if _model.QualityTier != 4 {
+		t.Fatalf("explicit Luna quality tier = %d, want 4", _model.QualityTier)
+	}
 	if _meta.CandidateCount != 2 {
 		t.Fatalf("candidate count = %d, want both providers", _meta.CandidateCount)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestExplicitCodexVariantQualityTiers(t *testing.T) {
+	_provider := testSessionProvider("provider-a")
+	_provider.Kind = "openai-codex"
+	_provider.Type = "openai-codex"
+
+	_tests := []struct {
+		model string
+		want  int
+	}{
+		{model: "GPT-5.6-Sol", want: 8},
+		{model: "gpt-5.6-terra", want: 6},
+		{model: "gpt-5.6_luna", want: 4},
+		{model: "gpt-5.5", want: 7},
+	}
+	for _, _test := range _tests {
+		if _got := explicitModelQualityTier(&_provider, _test.model, 7); _got != _test.want {
+			t.Errorf("explicitModelQualityTier(%q) = %d, want %d", _test.model, _got, _test.want)
+		}
 	}
 }
 
@@ -408,5 +433,99 @@ func TestQuotaBelowPeerAverageIgnoresUnrelatedProviderFamilies(t *testing.T) {
 	}
 	if _balancer.QuotaBelowPeerAverage("codex-a", 10) {
 		t.Fatal("an unrelated provider family must not force Codex affinity to drop")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 對話綁定上限：已達上限的 provider 不再接新對話，但已釘住的請求不受影響，
+// 且在完全沒有其他候選時仍可動用（不能把請求逼成沒有 provider 可用）。
+func TestConversationBindingCapAvoidsSaturatedProvider(t *testing.T) {
+	_balancer := NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "busy", Enabled: true, BaseURL: "http://busy", MaxConcurrent: 16,
+			Models: []domain.LLMModelConfig{{Name: "m", MaxInputTokens: 100000, MaxOutputTokens: 8192}}},
+		{ID: "free", Enabled: true, BaseURL: "http://free", MaxConcurrent: 16,
+			Models: []domain.LLMModelConfig{{Name: "m", MaxInputTokens: 100000, MaxOutputTokens: 8192}}},
+	}})
+	_balancer.SetConversationBindings(map[string]int{"busy": 4}, 4)
+
+	_request := &domain.ChatCompletionRequest{Model: "AUTO", Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+	for _idx := 0; _idx < 20; _idx++ {
+		_target, _, _, _, _err := _balancer.Select(_request)
+		if _err != nil {
+			t.Fatalf("select failed: %v", _err)
+		}
+		if _target.Config.ID != "free" {
+			t.Fatalf("saturated provider must not take new conversations, got %s", _target.Config.ID)
+		}
+	}
+
+	// 明確指定已滿的 provider（對話黏著）仍必須選得到
+	_pinned := &domain.ChatCompletionRequest{Model: "AUTO", ProviderID: "busy", Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+	_target, _, _, _, _err := _balancer.Select(_pinned)
+	if _err != nil || _target.Config.ID != "busy" {
+		t.Fatalf("pinned request must still reach the saturated provider: target=%v err=%v", _target, _err)
+	}
+
+	// 全部都滿的時候不能變成「沒有可用 provider」
+	_balancer.SetConversationBindings(map[string]int{"busy": 9, "free": 9}, 4)
+	if _, _, _, _, _err := _balancer.Select(_request); _err != nil {
+		t.Fatalf("cap must not starve selection when every provider is saturated: %v", _err)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestConversationBindingCapDisabledWhenLimitUnset(t *testing.T) {
+	_balancer := NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+		{ID: "only", Enabled: true, BaseURL: "http://only", MaxConcurrent: 16,
+			Models: []domain.LLMModelConfig{{Name: "m", MaxInputTokens: 100000, MaxOutputTokens: 8192}}},
+	}})
+	_balancer.SetConversationBindings(map[string]int{"only": 99}, 0)
+
+	_request := &domain.ChatCompletionRequest{Model: "AUTO", Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+	if _, _, _, _, _err := _balancer.Select(_request); _err != nil {
+		t.Fatalf("limit 0 should disable the cap: %v", _err)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 等級上限要真的排除高階模型，但在沒有任何合格模型時必須放行 ——
+// 降級是政策，不該讓請求變成「無 provider 可用」。
+func TestMaxQualityTierCapsSelection(t *testing.T) {
+	_tiered := func(_id string, _tier int) domain.LLMProviderConfig {
+		_provider := testSessionProvider(_id)
+		_provider.Models[0].QualityTier = _tier
+		_provider.Models[0].CostTier = _tier / 2
+		return _provider
+	}
+
+	_both := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{_tiered("strong", 8), _tiered("cheap", 4)},
+	})
+	_req := &domain.ChatCompletionRequest{
+		Messages:       []domain.ChatMessage{{Role: "user", Content: "hi"}},
+		MaxQualityTier: 4,
+	}
+	for _i := 0; _i < 20; _i++ {
+		_target, _model, _, _, _err := _both.Select(_req)
+		if _err != nil {
+			t.Fatalf("selection failed: %v", _err)
+		}
+		if _model.QualityTier > 4 {
+			t.Fatalf("tier cap was ignored: provider=%s tier=%d", _target.Config.ID, _model.QualityTier)
+		}
+	}
+
+	// 只剩高階模型時仍要能選出來，而不是回錯誤。
+	_only := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{_tiered("strong", 8)},
+	})
+	_target, _model, _, _, _err := _only.Select(_req)
+	if _err != nil {
+		t.Fatalf("cap must degrade, not break: %v", _err)
+	}
+	if _target == nil || _model == nil || _model.QualityTier != 8 {
+		t.Fatalf("expected the over-tier provider as a last resort, got %+v", _model)
 	}
 }

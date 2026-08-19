@@ -110,8 +110,8 @@ func (_c *Client) refreshProviderUsageForProvider(_ctx context.Context, _provide
 }
 
 // StartProviderUsageDailyAccounting captures quota boundaries at local 00:00 and 23:59.
-// A completed day is calculated from its own boundary values, so a provider quota reset
-// between calendar days cannot produce a negative daily usage value.
+// Live observations between those boundaries accumulate every positive quota drop. A
+// same-day reset begins a new quota segment without erasing already consumed usage.
 // -------------------------------------------------------------------------------------
 func (_c *Client) StartProviderUsageDailyAccounting(_ctx context.Context, _balancer *balancer.LoadBalancer) {
 	if _ctx == nil {

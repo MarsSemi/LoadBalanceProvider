@@ -1331,3 +1331,157 @@ func TestGenerationSpeedIgnoresBufferedBurstEvenWithProviderTiming(t *testing.T)
 		t.Fatalf("generation speed = %.2f, want ≈ %.2f", _speed, _expected)
 	}
 }
+
+// -------------------------------------------------------------------------------------
+// 只發工具呼叫的 turn，「給人看的文字」必須是 0 —— 這是分辨
+// 「模型在做事」與「模型只是在轉包工作」的依據，且完全不依賴工具名稱。
+func TestStreamPartsSeparateProseFromToolCalls(t *testing.T) {
+	_parse := func(_raw string) streamTextParts {
+		var _payload map[string]interface{}
+		if _err := json.Unmarshal([]byte(_raw), &_payload); _err != nil {
+			t.Fatalf("bad fixture: %v", _err)
+		}
+		return streamResponseParts(_payload)
+	}
+
+	_tool := _parse(`{"type":"response.function_call_arguments.delta","delta":"{\"command\":\"ls -la\"}"}`)
+	if _tool.Prose != "" || _tool.Reasoning != "" || _tool.Tool == "" {
+		t.Fatalf("tool call must not count as prose: %#v", _tool)
+	}
+
+	_text := _parse(`{"type":"response.output_text.delta","delta":"答案是這個"}`)
+	if _text.Prose == "" || _text.Tool != "" {
+		t.Fatalf("output text must count as prose: %#v", _text)
+	}
+
+	_reasoning := _parse(`{"type":"response.reasoning_summary_text.delta","delta":"considering options"}`)
+	if _reasoning.Reasoning == "" || _reasoning.Prose != "" {
+		t.Fatalf("reasoning must not count as prose: %#v", _reasoning)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 三段相加必須等於原本 streamResponseText 的結果，否則既有的
+// 字元數與 token 估算會跟著跑掉。
+func TestStreamPartsPreserveTotalText(t *testing.T) {
+	for _, _raw := range []string{
+		`{"type":"response.output_text.delta","delta":"hello"}`,
+		`{"type":"response.function_call_arguments.delta","delta":"{\"a\":1}"}`,
+		`{"choices":[{"delta":{"content":"hi","reasoning_content":"because"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"c1","function":{"arguments":"{}"}}]}}]}`,
+	} {
+		var _payload map[string]interface{}
+		if _err := json.Unmarshal([]byte(_raw), &_payload); _err != nil {
+			t.Fatalf("bad fixture: %v", _err)
+		}
+		_parts := streamResponseParts(_payload)
+		if _combined := _parts.Prose + _parts.Reasoning + _parts.Tool; _combined != streamResponseText(_payload) {
+			t.Fatalf("parts must recombine into the original text: %q != %q", _combined, streamResponseText(_payload))
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 工具呼叫計數用字尾比對，上游新增型別時不必跟著改，也不依賴工具名稱。
+func TestToolCallCountIsNameAgnostic(t *testing.T) {
+	for _, _itemType := range []string{"function_call", "local_shell_call", "custom_tool_call", "mcp_call", "some_future_call"} {
+		var _payload map[string]interface{}
+		_raw := `{"type":"response.output_item.added","item":{"type":"` + _itemType + `"}}`
+		if _err := json.Unmarshal([]byte(_raw), &_payload); _err != nil {
+			t.Fatalf("bad fixture: %v", _err)
+		}
+		if _parts := streamResponseParts(_payload); _parts.ToolCalls != 1 {
+			t.Fatalf("%s should count as one tool call, got %d", _itemType, _parts.ToolCalls)
+		}
+	}
+
+	// 非 _call 結尾的項目不能被算進去。
+	var _message map[string]interface{}
+	_ = json.Unmarshal([]byte(`{"type":"response.output_item.added","item":{"type":"message"}}`), &_message)
+	if _parts := streamResponseParts(_message); _parts.ToolCalls != 0 {
+		t.Fatalf("message items must not count as tool calls: %d", _parts.ToolCalls)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 非串流回應原本完全沒有分類資料，導致文字比恆為 0，
+// 和「真的沒有產出文字」分不開。這裡釘住三種形狀都要拆得出來。
+func TestNonStreamingResponsesCarryProseSplit(t *testing.T) {
+	_chat := responseMetrics([]byte(`{
+		"choices":[{"message":{"content":"這是回答","reasoning_content":"想一下",
+			"tool_calls":[{"id":"c1","function":{"arguments":"{\"path\":\"/tmp\"}"}}]}}],
+		"usage":{"completion_tokens":120}
+	}`))
+	if _chat.ProseTokens() <= 0 || _chat.ReasoningTokens() <= 0 || _chat.ToolTokens() <= 0 {
+		t.Fatalf("chat completions split missing: %+v", _chat)
+	}
+	if _chat.ToolCallCount != 1 {
+		t.Fatalf("chat tool call count = %d", _chat.ToolCallCount)
+	}
+
+	// Responses API：output 陣列依項目型別分流
+	_responses := responseMetrics([]byte(`{
+		"output":[
+			{"type":"reasoning","summary":[{"type":"summary_text","text":"checking the tree"}]},
+			{"type":"local_shell_call","arguments":"{\"command\":\"ls -la\"}"},
+			{"type":"message","content":[{"type":"output_text","text":"目錄列出來了"}]}
+		],
+		"usage":{"output_tokens":90}
+	}`))
+	if _responses.ProseTokens() <= 0 || _responses.ReasoningTokens() <= 0 || _responses.ToolTokens() <= 0 {
+		t.Fatalf("responses split missing: %+v", _responses)
+	}
+	if _responses.ToolCallCount != 1 {
+		t.Fatalf("responses tool call count = %d", _responses.ToolCallCount)
+	}
+
+	// 純工具呼叫：文字必須是 0，但整體仍有分類資料
+	_toolOnly := responseMetrics([]byte(`{
+		"output":[{"type":"local_shell_call","arguments":"{\"command\":\"ls\"}"}],
+		"usage":{"output_tokens":20}
+	}`))
+	if _toolOnly.ProseTokens() != 0 {
+		t.Fatalf("tool-only turn must have no prose: %+v", _toolOnly)
+	}
+	if _toolOnly.ToolTokens() <= 0 {
+		t.Fatalf("tool-only turn should still record tool tokens: %+v", _toolOnly)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 推理量必須用上游回報的精確值。字元估算取代不了它：
+// provider 多半不串流推理內容，就算開了摘要，摘要也比實際推理量小一個數量級。
+func TestReasoningTokensPreferReportedValue(t *testing.T) {
+	_reported := responseMetrics([]byte(`{
+		"output":[{"type":"local_shell_call","arguments":"{\"command\":\"ls\"}"}],
+		"usage":{"output_tokens":1589,"output_tokens_details":{"reasoning_tokens":1400}}
+	}`))
+	if _reported.ReasoningTokens() != 1400 {
+		t.Fatalf("reported reasoning should win: %d", _reported.ReasoningTokens())
+	}
+	// 沒有任何推理文字被串流，字元估算會是 0 —— 這正是不能拿它當分母的理由。
+	if estimateTokensFromCounts(_reported.ReasoningHanChars, _reported.ReasoningOtherChars) != 0 {
+		t.Fatalf("no reasoning text was streamed in this fixture")
+	}
+
+	// 上游沒回報時才退回字元估算
+	_estimated := responseMetrics([]byte(`{
+		"output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"thinking it through"}]}],
+		"usage":{"output_tokens":40}
+	}`))
+	if _estimated.ReasoningTokens() <= 0 {
+		t.Fatalf("should fall back to the character estimate: %+v", _estimated)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// usage 在串流裡通常只出現一次且是總量，合併時相加會重複計算。
+func TestReportedReasoningMergesByMaxNotSum(t *testing.T) {
+	_total := ChatMetrics{}
+	_total.merge(ChatMetrics{ReportedReasoningTokens: 0})
+	_total.merge(ChatMetrics{ReportedReasoningTokens: 1400})
+	_total.merge(ChatMetrics{ReportedReasoningTokens: 1400})
+	if _total.ReportedReasoningTokens != 1400 {
+		t.Fatalf("reasoning tokens should not accumulate across events: %d", _total.ReportedReasoningTokens)
+	}
+}

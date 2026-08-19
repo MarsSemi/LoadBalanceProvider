@@ -43,6 +43,21 @@ type AdvancedSettingsConfig struct {
 	ConversationAffinityQuotaTolerancePoints float64 `json:"conversation_affinity_quota_tolerance_points"`
 	ResponseRouteMaxEntries                  int     `json:"response_route_max_entries"`
 	ProviderCapacityCooldownSeconds          int     `json:"provider_capacity_cooldown_seconds"`
+	MaxBindingsPerProvider                   int     `json:"max_bindings_per_provider"`
+	YieldLowMaxPercent                       float64 `json:"yield_low_max_percent"`
+	YieldMidMaxPercent                       float64 `json:"yield_mid_max_percent"`
+	// 低推理降級：高頻率且推理佔比極低時，暫時把該金鑰壓到低階模型。
+	// 依據是「模型自己的難度評估」——推理量少代表這個工作量不需要強模型。
+	LowReasoningDemotionEnabled          bool    `json:"low_reasoning_demotion_enabled"`
+	LowReasoningDemotionRequestsPerMin   float64 `json:"low_reasoning_demotion_requests_per_minute"`
+	LowReasoningDemotionReasoningPercent float64 `json:"low_reasoning_demotion_reasoning_percent"`
+	LowReasoningDemotionTargetTier       int     `json:"low_reasoning_demotion_target_tier"`
+	// 解除必須是時間驅動而非指標驅動：降級後的模型推理本來就少，
+	// 若用指標決定何時解除，會永遠留在低階模型而觀察不到反事實。
+	LowReasoningDemotionMinutes int `json:"low_reasoning_demotion_minutes"`
+	// 啟動條件：今日配額消耗未達這個百分比之前完全不偵測。
+	// 配額還很充裕時沒有必要限制任何人 —— 大量消耗本身不是問題。
+	LowReasoningDemotionMinDailyUsagePercent float64 `json:"low_reasoning_demotion_min_daily_usage_percent"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -97,6 +112,10 @@ type LLMModelConfig struct {
 
 // -------------------------------------------------------------------------------------
 type ChatCompletionRequest struct {
+	// MaxQualityTier 是伺服器端加上的模型等級上限（0 表示不限）。
+	// 標記 json:"-" 是刻意的：這是內部政策，不能讓用戶端自己設定，
+	// 否則任何人都可以宣告自己不受降級限制。
+	MaxQualityTier        int                    `json:"-"`
 	Model                 string                 `json:"model"`
 	Provider              string                 `json:"provider,omitempty"`
 	ProviderID            string                 `json:"provider_id,omitempty"`

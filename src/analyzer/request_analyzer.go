@@ -38,7 +38,7 @@ func (_a *RequestAnalyzer) Analyze(_req *domain.ChatCompletionRequest) domain.Re
 		_taskType = _forcedTask
 		_signals = append(_signals, _forcedTask)
 	}
-	_complexity := _a.ScoreComplexity(_estimatedTokens, _outputTokens, len(_req.Messages), _signals)
+	_complexity := _a.ScoreComplexity(_estimatedTokens, _outputTokens, len(_req.Messages), _signals, requestReasoningEffort(_req))
 
 	return domain.RequestProfile{
 		InputCharacters:       _inputChars,
@@ -175,7 +175,7 @@ func (_a *RequestAnalyzer) Classify(_text string, _messages []domain.ChatMessage
 }
 
 // -------------------------------------------------------------------------------------
-func (_a *RequestAnalyzer) ScoreComplexity(_inputTokens int, _outputTokens int, _messageCount int, _signals []string) int {
+func (_a *RequestAnalyzer) ScoreComplexity(_inputTokens int, _outputTokens int, _messageCount int, _signals []string, _reasoningEffort string) int {
 	_score := 1
 
 	switch {
@@ -202,6 +202,17 @@ func (_a *RequestAnalyzer) ScoreComplexity(_inputTokens int, _outputTokens int, 
 	}
 
 	if len(_signals) >= 2 {
+		_score++
+	}
+
+	// 高推理程度的請求即使輸入很短，實際消耗仍然很大；
+	// 只看長度會把它誤判成低階請求。
+	switch normalizeReasoningEffortForScore(_reasoningEffort) {
+	case "xhigh":
+		_score += 3
+	case "high":
+		_score += 2
+	case "medium":
 		_score++
 	}
 
@@ -383,4 +394,27 @@ func uniqueStrings(_values []string) []string {
 		_result = append(_result, _value)
 	}
 	return _result
+}
+
+// -------------------------------------------------------------------------------------
+// requestReasoningEffort 取出請求指定的推理程度，兩種寫法都支援：
+// 頂層 reasoning_effort，以及 Responses API 的 reasoning.effort。
+func requestReasoningEffort(_req *domain.ChatCompletionRequest) string {
+	if _req == nil {
+		return ""
+	}
+	if _effort := strings.TrimSpace(_req.ReasoningEffort); _effort != "" {
+		return _effort
+	}
+	if _req.Reasoning != nil {
+		if _effort, _ok := _req.Reasoning["effort"].(string); _ok {
+			return strings.TrimSpace(_effort)
+		}
+	}
+	return ""
+}
+
+// -------------------------------------------------------------------------------------
+func normalizeReasoningEffortForScore(_effort string) string {
+	return strings.ToLower(strings.TrimSpace(_effort))
 }

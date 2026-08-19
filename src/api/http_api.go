@@ -41,6 +41,7 @@ import (
 	"LoadBalanceProvider/src/security"
 	"LoadBalanceProvider/src/serviceupdate"
 	"LoadBalanceProvider/src/systemmonitor"
+	"LoadBalanceProvider/src/telemetry"
 
 	"github.com/MarsSemi/MarsCloud-SaaS/SDK/HttpService"
 	"github.com/MarsSemi/MarsCloud-SaaS/SDK/MarsJSON"
@@ -60,6 +61,9 @@ const (
 
 // -------------------------------------------------------------------------------------
 type HTTPAPI struct {
+	bindingRefreshLock sync.Mutex
+	bindingRefreshedAt time.Time
+
 	Balancer                   *balancer.LoadBalancer
 	Client                     *proxy.Client
 	ConfigPath                 string
@@ -147,6 +151,15 @@ type AdvancedSettingsForm struct {
 	ConversationAffinityQuotaTolerancePoints float64 `json:"conversationAffinityQuotaTolerancePoints"`
 	ResponseRouteMaxEntries                  int     `json:"responseRouteMaxEntries"`
 	ProviderCapacityCooldownSeconds          int     `json:"providerCapacityCooldownSeconds"`
+	MaxBindingsPerProvider                   int     `json:"maxBindingsPerProvider"`
+	YieldLowMaxPercent                       float64 `json:"yieldLowMaxPercent"`
+	YieldMidMaxPercent                       float64 `json:"yieldMidMaxPercent"`
+	LowReasoningDemotionEnabled              bool    `json:"lowReasoningDemotionEnabled"`
+	LowReasoningDemotionRequestsPerMin       float64 `json:"lowReasoningDemotionRequestsPerMin"`
+	LowReasoningDemotionReasoningPercent     float64 `json:"lowReasoningDemotionReasoningPercent"`
+	LowReasoningDemotionTargetTier           int     `json:"lowReasoningDemotionTargetTier"`
+	LowReasoningDemotionMinutes              int     `json:"lowReasoningDemotionMinutes"`
+	LowReasoningDemotionMinDailyUsagePercent float64 `json:"lowReasoningDemotionMinDailyUsagePercent"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -158,6 +171,15 @@ type AdvancedSettingsUpdateRequest struct {
 	ConversationAffinityQuotaTolerancePoints *float64 `json:"conversationAffinityQuotaTolerancePoints"`
 	ResponseRouteMaxEntries                  *int     `json:"responseRouteMaxEntries"`
 	ProviderCapacityCooldownSeconds          *int     `json:"providerCapacityCooldownSeconds"`
+	MaxBindingsPerProvider                   *int     `json:"maxBindingsPerProvider"`
+	YieldLowMaxPercent                       *float64 `json:"yieldLowMaxPercent"`
+	YieldMidMaxPercent                       *float64 `json:"yieldMidMaxPercent"`
+	LowReasoningDemotionEnabled              *bool    `json:"lowReasoningDemotionEnabled"`
+	LowReasoningDemotionRequestsPerMin       *float64 `json:"lowReasoningDemotionRequestsPerMin"`
+	LowReasoningDemotionReasoningPercent     *float64 `json:"lowReasoningDemotionReasoningPercent"`
+	LowReasoningDemotionTargetTier           *int     `json:"lowReasoningDemotionTargetTier"`
+	LowReasoningDemotionMinutes              *int     `json:"lowReasoningDemotionMinutes"`
+	LowReasoningDemotionMinDailyUsagePercent *float64 `json:"lowReasoningDemotionMinDailyUsagePercent"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -393,6 +415,10 @@ func (_h *HTTPAPI) Process(_w http.ResponseWriter, _r *http.Request, _jwt *MarsJ
 
 	case _r.Method == http.MethodPost && isAPIKeyActionRoute(_route, "enable"):
 		_h.handleSetAPIKeyEnabled(_w, apiKeyIDFromActionRoute(_route, "enable"), true)
+		return responseHandled()
+
+	case _r.Method == http.MethodGet && isAPIKeyDensityRoute(_route):
+		_h.handleGetAPIKeyDensity(_w, _r.URL.Query().Get("window"))
 		return responseHandled()
 
 	case _r.Method == http.MethodGet && isAPIKeyUsageQueryRoute(_route):
@@ -1447,6 +1473,7 @@ func (_h *HTTPAPI) handleGetAdvancedSettings(_w http.ResponseWriter) {
 	}
 	_h.writeJSON(_w, http.StatusOK, map[string]interface{}{
 		"advanced": advancedSettingsForm(_settings),
+		"warning":  _h.advancedSettingsWarning(_settings),
 	})
 }
 
@@ -1472,6 +1499,33 @@ func (_h *HTTPAPI) handleSaveAdvancedSettings(_w http.ResponseWriter, _body []by
 	if _request.ProviderCapacityCooldownSeconds != nil {
 		_saved.ProviderCapacityCooldownSeconds = *_request.ProviderCapacityCooldownSeconds
 	}
+	if _request.MaxBindingsPerProvider != nil {
+		_saved.MaxBindingsPerProvider = *_request.MaxBindingsPerProvider
+	}
+	if _request.YieldLowMaxPercent != nil {
+		_saved.YieldLowMaxPercent = *_request.YieldLowMaxPercent
+	}
+	if _request.YieldMidMaxPercent != nil {
+		_saved.YieldMidMaxPercent = *_request.YieldMidMaxPercent
+	}
+	if _request.LowReasoningDemotionEnabled != nil {
+		_saved.LowReasoningDemotionEnabled = *_request.LowReasoningDemotionEnabled
+	}
+	if _request.LowReasoningDemotionRequestsPerMin != nil {
+		_saved.LowReasoningDemotionRequestsPerMin = *_request.LowReasoningDemotionRequestsPerMin
+	}
+	if _request.LowReasoningDemotionReasoningPercent != nil {
+		_saved.LowReasoningDemotionReasoningPercent = *_request.LowReasoningDemotionReasoningPercent
+	}
+	if _request.LowReasoningDemotionTargetTier != nil {
+		_saved.LowReasoningDemotionTargetTier = *_request.LowReasoningDemotionTargetTier
+	}
+	if _request.LowReasoningDemotionMinutes != nil {
+		_saved.LowReasoningDemotionMinutes = *_request.LowReasoningDemotionMinutes
+	}
+	if _request.LowReasoningDemotionMinDailyUsagePercent != nil {
+		_saved.LowReasoningDemotionMinDailyUsagePercent = *_request.LowReasoningDemotionMinDailyUsagePercent
+	}
 	if _err := config.ValidateAdvancedSettingsConfig(_saved); _err != nil {
 		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", _err.Error()))
 		return
@@ -1481,8 +1535,11 @@ func (_h *HTTPAPI) handleSaveAdvancedSettings(_w http.ResponseWriter, _body []by
 		return
 	}
 	_h.cacheAdvancedSettings(_saved)
+	// 門檻改了就把既有降級清掉，否則舊門檻造成的降級會活到計時器到期為止。
+	_defaultDemotionTracker.ClearDemotion("")
 	_h.writeJSON(_w, http.StatusOK, map[string]interface{}{
 		"advanced": advancedSettingsForm(_saved),
+		"warning":  _h.advancedSettingsWarning(_saved),
 	})
 }
 
@@ -1671,6 +1728,15 @@ func advancedSettingsForm(_config domain.AdvancedSettingsConfig) AdvancedSetting
 		ConversationAffinityQuotaTolerancePoints: _config.ConversationAffinityQuotaTolerancePoints,
 		ResponseRouteMaxEntries:                  _config.ResponseRouteMaxEntries,
 		ProviderCapacityCooldownSeconds:          _config.ProviderCapacityCooldownSeconds,
+		MaxBindingsPerProvider:                   _config.MaxBindingsPerProvider,
+		YieldLowMaxPercent:                       _config.YieldLowMaxPercent,
+		YieldMidMaxPercent:                       _config.YieldMidMaxPercent,
+		LowReasoningDemotionEnabled:              _config.LowReasoningDemotionEnabled,
+		LowReasoningDemotionRequestsPerMin:       _config.LowReasoningDemotionRequestsPerMin,
+		LowReasoningDemotionReasoningPercent:     _config.LowReasoningDemotionReasoningPercent,
+		LowReasoningDemotionTargetTier:           _config.LowReasoningDemotionTargetTier,
+		LowReasoningDemotionMinutes:              _config.LowReasoningDemotionMinutes,
+		LowReasoningDemotionMinDailyUsagePercent: _config.LowReasoningDemotionMinDailyUsagePercent,
 	}
 }
 
@@ -2793,8 +2859,9 @@ func (_h *HTTPAPI) handleChatCompletions(_w http.ResponseWriter, _r *http.Reques
 		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", "request body is not a valid chat completion payload"))
 		return
 	}
+	_requestSignals := telemetry.AnalyzeRequestJSON(_body)
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, proxy.ChatRefusalTerminal, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ChatRefusalTerminal, nil, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardChatCompletion(_ctx, _attemptWriter, _r, _target, _model, &_chatReq, _body, _profile, _selectionMeta)
 	})
 }
@@ -2817,6 +2884,8 @@ func (_h *HTTPAPI) handleResponsesProxy(_w http.ResponseWriter, _r *http.Request
 		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", _err.Error()))
 		return
 	}
+	// 必須在 continuity 被移除前分析，否則會遺失 previous_response_id 與工具回傳訊號。
+	_requestSignals := telemetry.AnalyzeRequestJSON(_body)
 
 	// 有 previous_response_id 的後續請求必須回到同一個 provider；沒有則維持負載平衡。
 	if _, _dropped := _h.applyConversationAffinity(&_chatReq, _body, _r); _dropped {
@@ -2828,8 +2897,23 @@ func (_h *HTTPAPI) handleResponsesProxy(_w http.ResponseWriter, _r *http.Request
 		_body = _stripped
 	}
 
+	// 換帳號時必須先移除延續性內容，否則新帳號一定解不開加密推理。
+	_continuityReleased := false
+	_releaseContinuity := func() bool {
+		if _continuityReleased {
+			return false
+		}
+		_stripped, _err := stripConversationContinuity(_body)
+		if _err != nil {
+			return false
+		}
+		_body = _stripped
+		_continuityReleased = true
+		return true
+	}
+
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, proxy.ResponsesRefusalTerminal, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ResponsesRefusalTerminal, _releaseContinuity, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardResponses(_ctx, _attemptWriter, _r, _target, _model, _body, _profile, _selectionMeta)
 	})
 }
@@ -2897,6 +2981,42 @@ func applyAPIKeyRoutingPolicyToPayload(_payload map[string]interface{}, _policy 
 }
 
 // -------------------------------------------------------------------------------------
+// applyLowReasoningDemotion 套用低推理降級的模型等級上限。
+// 必須在 Select 之前呼叫；重試時沿用同一個上限，不重新評估。
+func (_h *HTTPAPI) applyLowReasoningDemotion(_r *http.Request, _request *domain.ChatCompletionRequest) {
+	if _h == nil || _r == nil || _request == nil {
+		return
+	}
+	_view, _ok := _r.Context().Value(requestAPIKeyContextKey{}).(auth.APIKeyView)
+	if !_ok || strings.TrimSpace(_view.ID) == "" {
+		return
+	}
+	if _tier := _defaultDemotionTracker.MaxQualityTierForKey(_view.ID, _h.currentAdvancedSettings(), _h.todayQuotaUsage); _tier > 0 {
+		_request.MaxQualityTier = _tier
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// todayQuotaUsage 回傳今日已消耗的配額百分比（跨啟用中的 provider 平均）。
+// 第二個回傳值為 false 代表今天還沒有可用的觀測。
+func (_h *HTTPAPI) todayQuotaUsage() (float64, bool) {
+	if _h == nil || _h.Balancer == nil {
+		return 0, false
+	}
+	_ids := make([]string, 0, len(_h.Balancer.Providers))
+	for _, _provider := range _h.Balancer.Providers {
+		if _provider == nil || _provider.Config == nil || !_provider.Config.Enabled {
+			continue
+		}
+		_ids = append(_ids, _provider.Config.ID)
+	}
+	if len(_ids) == 0 {
+		return 0, false
+	}
+	return _h.providerUsageRecorder().TodayUsagePercent(_ids, time.Now())
+}
+
+// -------------------------------------------------------------------------------------
 func applyAPIKeyRoutingPolicyToSelectionRequest(_r *http.Request, _request *domain.ChatCompletionRequest) {
 	_policy, _ok := apiKeyRoutingPolicyFromRequest(_r)
 	if !_ok || _request == nil {
@@ -2927,6 +3047,7 @@ func (_h *HTTPAPI) handleResponsesRawProxy(_w http.ResponseWriter, _r *http.Requ
 			return
 		}
 	}
+	_requestSignals := telemetry.AnalyzeRequestJSON(_body)
 	_selectionReq, _err := responsesRouteSelectionRequest(_route, _body)
 	if _err != nil {
 		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", _err.Error()))
@@ -2941,6 +3062,8 @@ func (_h *HTTPAPI) handleResponsesRawProxy(_w http.ResponseWriter, _r *http.Requ
 		return
 	}
 
+	_h.applyLowReasoningDemotion(_r, &_selectionReq)
+	_h.refreshConversationBindings()
 	_started := time.Now()
 	_target, _model, _profile, _selectionMeta, _err := _h.Balancer.Select(&_selectionReq)
 	if _err != nil {
@@ -2949,6 +3072,7 @@ func (_h *HTTPAPI) handleResponsesRawProxy(_w http.ResponseWriter, _r *http.Requ
 		return
 	}
 
+	noteKeyRequestComplexity(_r, _profile, _requestSignals)
 	_target.StartRequest()
 	defer _target.FinishRequest()
 
@@ -2977,6 +3101,7 @@ func (_h *HTTPAPI) handleResponsesRawProxy(_w http.ResponseWriter, _r *http.Requ
 	_reactionMS := observedReactionMS(_metrics)
 	_target.MarkSuccessWithMetrics(_duration, _metrics.CompletionTokens, _reactionMS, _tokenSpeed, _clientDeliveryTPS)
 	_target.RecordProviderReportedTPS(_metrics.ProviderReportedGenerationTPS())
+	noteKeyRequestConsumption(_r, _model, _profile, _metrics)
 	_ = history.RecordChat(history.RecordFromSelectionWithUsage(_started, time.Now(), _selectionReq, _target, _model, _profile, _selectionMeta, true, nil, _metrics.CompletionTokens, _tokenSpeed, _clientDeliveryTPS, _metrics.EstimatedTokens, _reactionMS))
 	if responseRouteIsDelete(_route) && _h.Client != nil {
 		_h.Client.DeleteResponseRoute(responsesRouteResponseID(_route.Path))
@@ -3009,7 +3134,7 @@ func requestForwardContext(_parent context.Context, _timeout time.Duration, _str
 type providerForwardAttempt func(context.Context, http.ResponseWriter, *balancer.ProviderRuntime, *domain.LLMModelConfig, domain.RequestProfile, balancer.SelectionMeta) (proxy.ChatMetrics, error)
 
 // -------------------------------------------------------------------------------------
-func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _refusalTerminal func(string) []byte, _forward providerForwardAttempt) {
+func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _signals telemetry.RequestSignals, _refusalTerminal func(string) []byte, _releaseContinuity func() bool, _forward providerForwardAttempt) {
 	// 釘住 provider 的請求（對話黏著或金鑰強制路由）不能換帳號，否則延續性內容會失效；
 	// 但同一個帳號的暫時性錯誤仍可重試，對使用者是無痕的。
 	_pinnedProvider := strings.TrimSpace(_request.ProviderID) != "" || strings.TrimSpace(_request.Provider) != ""
@@ -3017,7 +3142,10 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 	if _pinnedProvider && _maxRetries > pinnedProviderMaxRetries {
 		_maxRetries = pinnedProviderMaxRetries
 	}
+	_h.applyLowReasoningDemotion(_r, &_request)
+	_h.refreshConversationBindings()
 	_excluded := []string{}
+	_complexityRecorded := false
 	var _lastErr error
 	var _lastDeferred *deferredResponseWriter
 
@@ -3035,6 +3163,12 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 			_ = history.RecordChat(history.RecordFromSelection(_started, time.Now(), _request, nil, nil, _profile, _selectionMeta, false, _err))
 			_h.writeSelectionUnavailable(_w, _r, _err)
 			return
+		}
+
+		if !_complexityRecorded {
+			// 只在第一次成功選擇時記錄：重試是同一個請求，不該重複計數。
+			noteKeyRequestComplexity(_r, _profile, _signals)
+			_complexityRecorded = true
 		}
 
 		_attemptStarted := time.Now()
@@ -3063,6 +3197,7 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 				_reactionMS := observedReactionMS(_metrics)
 				_target.MarkSuccessWithMetrics(_duration, _metrics.CompletionTokens, _reactionMS, _tokenSpeed, _clientDeliveryTPS)
 				_target.RecordProviderReportedTPS(_metrics.ProviderReportedGenerationTPS())
+				noteKeyRequestConsumption(_r, _model, _profile, _metrics)
 				_ = history.RecordChat(history.RecordFromSelectionWithUsage(_started, time.Now(), _request, _target, _model, _profile, _selectionMeta, true, nil, _metrics.CompletionTokens, _tokenSpeed, _clientDeliveryTPS, _metrics.EstimatedTokens, _reactionMS))
 				return
 			}
@@ -3090,7 +3225,23 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 		}
 
 		if _pinnedProvider {
-			// 保留原 provider 讓下一輪重選到同一個帳號；短暫退避讓上游的暫時性故障有機會恢復。
+			// 被釘住的 provider 撞到容量／限流時，只在同一個帳號上重試會一路失敗到
+			// 客戶端顯示 retry limit。此時放棄黏著、移除延續性內容改用其他帳號：
+			// 那一輪會失去推理脈絡，但至少能完成。
+			if proxy.IsRetryableCapacityError(_forwardErr) && _releaseContinuity != nil &&
+				_h.conversationPinIsReleasable(_r) && _releaseContinuity() {
+				log.Printf(
+					"conversation pin released after capacity failure: provider=%s error=%v",
+					_target.Config.ID, _forwardErr,
+				)
+				_request.ProviderID = ""
+				_request.Provider = ""
+				_pinnedProvider = false
+				_maxRetries = _h.providerRetryCount()
+				_excluded = append(_excluded, _target.Config.ID)
+				continue
+			}
+			// 其餘暫時性故障：保留原 provider，短暫退避讓它有機會恢復。
 			if !waitBeforeRetry(_r.Context(), _attempt) {
 				return
 			}
@@ -3119,6 +3270,84 @@ func (_h *HTTPAPI) writeGracefulStreamTerminal(_w http.ResponseWriter, _deferred
 		return false
 	}
 	return _deferred.Commit() == nil
+}
+
+// -------------------------------------------------------------------------------------
+// noteKeyRequestComplexity 記錄這支金鑰本次請求的複雜度，供密集度統計使用。
+// 必須在 Select 成功之後呼叫（RequestProfile 這時才算好），且每個請求只記一次 ——
+// 重試不應該灌大分級次數。
+func noteKeyRequestComplexity(_r *http.Request, _profile domain.RequestProfile, _requestSignals ...telemetry.RequestSignals) {
+	if _r == nil {
+		return
+	}
+	_view, _ok := _r.Context().Value(requestAPIKeyContextKey{}).(auth.APIKeyView)
+	if !_ok || strings.TrimSpace(_view.ID) == "" {
+		return
+	}
+	_sample := keyusage.RequestSample{Complexity: _profile.ComplexityScore}
+	if len(_requestSignals) > 0 {
+		_signals := _requestSignals[0]
+		_sample.Continuation = _signals.Continuation
+		_sample.Fingerprint = _signals.Fingerprint
+		_sample.ToolCalls = _signals.ToolCalls
+		_sample.ToolRounds = _signals.ToolRounds
+		_sample.ToolOutputTokens = _signals.ToolOutputTokens
+	}
+	if _err := keyusage.DefaultRecorder().RecordRequest(_view.ID, time.Now(), _sample); _err != nil {
+		log.Printf("key complexity record failed: key=%s error=%v", _view.ID, _err)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// estimateStreamedTokens 只用來判斷「這筆回應拆得出用途分類嗎」，不是比例的分母。
+// 分母用的是上游回報的 completion tokens（已含推理），否則 provider 不串流
+// 推理內容時，分母會少掉絕大部分而讓文字比虛高。
+func estimateStreamedTokens(_metrics proxy.ChatMetrics) int {
+	return _metrics.ProseTokens() + _metrics.ReasoningTokens() + _metrics.ToolTokens()
+}
+
+// -------------------------------------------------------------------------------------
+// noteKeyRequestConsumption 記錄這支金鑰本次請求的實際輸出量。
+// 只有成功完成才會呼叫 —— 進行中或失敗的請求沒有可信的消耗量。
+func noteKeyRequestConsumption(_r *http.Request, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _metrics proxy.ChatMetrics) {
+	if _r == nil || _metrics.CompletionTokens <= 0 {
+		return
+	}
+	_view, _ok := _r.Context().Value(requestAPIKeyContextKey{}).(auth.APIKeyView)
+	if !_ok || strings.TrimSpace(_view.ID) == "" {
+		return
+	}
+	_sample := keyusage.ConsumptionSample{
+		Tokens:       _metrics.CompletionTokens,
+		Complexity:   _profile.ComplexityScore,
+		PromptTokens: _profile.EstimatedInputTokens,
+	}
+	// 只有串流回應拆得出用途分類。非串流時兩者都是 0，該筆就不列入文字比統計 ——
+	// 留成 0 會被誤讀成「整輪都在呼叫工具」。
+	_sample.ProseTokens = _metrics.ProseTokens()
+	_sample.ReasoningTokens = _metrics.ReasoningTokens()
+	_sample.ReasoningReported = _metrics.ReasoningReported
+	_sample.StreamedTokens = estimateStreamedTokens(_metrics)
+	// 實際選中的模型等級。強制路由或退回其他 provider 時模型會變，
+	// 所以要記錄「真的用到的」而不是請求要的。
+	if _model != nil {
+		_sample.QualityTier = _model.QualityTier
+	}
+	if _err := keyusage.DefaultRecorder().RecordConsumption(_view.ID, time.Now(), _sample); _err != nil {
+		log.Printf("key consumption record failed: key=%s error=%v", _view.ID, _err)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// conversationPinIsReleasable 判斷目前的 provider 綁定能不能為了避開故障而解除。
+// 金鑰明確強制的 provider 是管理員政策，不能擅自更換；
+// 對話黏著造成的綁定則可以解除（代價是該輪失去推理脈絡）。
+func (_h *HTTPAPI) conversationPinIsReleasable(_r *http.Request) bool {
+	_policy, _ok := apiKeyRoutingPolicyFromRequest(_r)
+	if !_ok {
+		return true
+	}
+	return strings.EqualFold(_policy.ProviderID, "AUTO")
 }
 
 // -------------------------------------------------------------------------------------
@@ -3473,7 +3702,9 @@ func (_h *HTTPAPI) handleMultimodalProxy(_w http.ResponseWriter, _r *http.Reques
 		RequiredCapabilities: []string{_spec.Requirement},
 	}
 	applyAPIKeyRoutingPolicyToSelectionRequest(_r, &_selectionReq)
+	_h.applyLowReasoningDemotion(_r, &_selectionReq)
 
+	_h.refreshConversationBindings()
 	_started := time.Now()
 	_target, _model, _profile, _selectionMeta, _err := _h.Balancer.Select(&_selectionReq)
 	if _err != nil {
@@ -3481,6 +3712,7 @@ func (_h *HTTPAPI) handleMultimodalProxy(_w http.ResponseWriter, _r *http.Reques
 		return
 	}
 
+	noteKeyRequestComplexity(_r, _profile)
 	_target.StartRequest()
 	defer _target.FinishRequest()
 
@@ -4114,6 +4346,11 @@ func isAPIKeyUsageRoute(_route string) bool {
 }
 
 // -------------------------------------------------------------------------------------
+func isAPIKeyDensityRoute(_route string) bool {
+	return _route == "/api/api-keys/density" || _route == "/v1/api-keys/density"
+}
+
+// -------------------------------------------------------------------------------------
 func isAPIKeyUsageQueryRoute(_route string) bool {
 	return _route == "/api/api-keys/usage" || _route == "/v1/api-keys/usage"
 }
@@ -4532,3 +4769,199 @@ func (_h *HTTPAPI) writeJSON(_w http.ResponseWriter, _status int, _payload inter
 }
 
 // -------------------------------------------------------------------------------------
+
+// -------------------------------------------------------------------------------------
+const (
+	defaultKeyDensityWindow = 5 * time.Minute
+	maxKeyDensityWindow     = time.Hour
+)
+
+// -------------------------------------------------------------------------------------
+// handleGetAPIKeyDensity 回傳所有金鑰的請求密集度（依複雜度分級）。
+// 以金鑰清單為主體：沒有流量的金鑰也會列出（計數為 0），方便直接比較。
+func (_h *HTTPAPI) handleGetAPIKeyDensity(_w http.ResponseWriter, _window string) {
+	_duration := parseKeyDensityWindow(_window)
+	_settings := _h.currentAdvancedSettings()
+	_yieldThresholds := keyusage.YieldThresholds{
+		LowMaxRatio: _settings.YieldLowMaxPercent / 100,
+		MidMaxRatio: _settings.YieldMidMaxPercent / 100,
+	}
+
+	_densities := map[string]keyusage.RequestDensity{}
+	for _, _density := range keyusage.DefaultRecorder().AllRequestDensityWithYieldThresholds(_duration, _yieldThresholds) {
+		_densities[_density.KeyID] = _density
+	}
+
+	_keys, _err := auth.DefaultAPIKeyStore().List()
+	if _err != nil {
+		_h.writeJSON(_w, http.StatusInternalServerError, domain.ErrorResponse("load_failed", _err.Error()))
+		return
+	}
+
+	_items := make([]map[string]interface{}, 0, len(_keys))
+	_seen := map[string]bool{}
+	_total := 0
+	_totalTokens := 0
+	for _, _key := range _keys {
+		_density := _densities[_key.ID]
+		_seen[_key.ID] = true
+		_total += _density.Count
+		_totalTokens += _density.Tokens
+		_items = append(_items, keyDensityItem(_key.Name, _key.KeyType, _key.Enabled, _density))
+	}
+	// 已刪除但視窗內仍有樣本的金鑰也要列出，否則流量會憑空消失。
+	for _id, _density := range _densities {
+		if _seen[_id] {
+			continue
+		}
+		_ = _id
+		_total += _density.Count
+		_totalTokens += _density.Tokens
+		_items = append(_items, keyDensityItem("(已刪除)", "", false, _density))
+	}
+
+	// 以實際消耗排序：這份清單要回答的是「誰在燒配額」，
+	// 請求數只是次要佐證（尚未完成的請求還沒有可信的消耗量）。
+	sort.Slice(_items, func(_i int, _j int) bool {
+		if _left, _right := _items[_i]["tokens"].(int), _items[_j]["tokens"].(int); _left != _right {
+			return _left > _right
+		}
+		if _left, _right := _items[_i]["count"].(int), _items[_j]["count"].(int); _left != _right {
+			return _left > _right
+		}
+		return _items[_i]["name"].(string) < _items[_j]["name"].(string)
+	})
+
+	_h.writeJSON(_w, http.StatusOK, map[string]interface{}{
+		"window_seconds": _duration.Seconds(),
+		"total_requests": _total,
+		"total_tokens":   _totalTokens,
+		"yield_thresholds": map[string]float64{
+			"low_max_percent": _settings.YieldLowMaxPercent,
+			"mid_max_percent": _settings.YieldMidMaxPercent,
+		},
+		"keys": _items,
+	})
+}
+
+// -------------------------------------------------------------------------------------
+// keyDensityItem 刻意不輸出任何金鑰識別資訊（ID、前綴、遮罩值）：
+// 這份清單只用於觀察用量與頻率，名稱已足夠辨識。
+func keyDensityItem(_name string, _keyType string, _enabled bool, _density keyusage.RequestDensity) map[string]interface{} {
+	return map[string]interface{}{
+		"name":                    _name,
+		"key_type":                _keyType,
+		"enabled":                 _enabled,
+		"count":                   _density.Count,
+		"per_minute":              _density.PerMinute,
+		"completed_requests":      _density.CompletedRequests,
+		"tokens":                  _density.Tokens,
+		"tokens_per_minute":       _density.TokensPerMinute,
+		"tokens_per_request":      _density.TokensPerRequest,
+		"prompt_tokens":           _density.PromptTokens,
+		"quality_tier_avg":        _density.QualityTierAvg,
+		"output_ratio":            _density.OutputRatio,
+		"output_ratio_median":     _density.OutputRatioMedian,
+		"prose_ratio":             _density.ProseRatio,
+		"prose_ratio_median":      _density.ProseRatioMedian,
+		"prose_samples":           _density.ProseSamples,
+		"reasoning_tokens":        _density.ReasoningTokens,
+		"reasoning_ratio":         _density.ReasoningRatio,
+		"reasoning_samples":       _density.ReasoningSamples,
+		"continuation_count":      _density.ContinuationCount,
+		"continuation_ratio":      _density.ContinuationRatio,
+		"fingerprinted_requests":  _density.FingerprintedCount,
+		"repeated_requests":       _density.RepeatedTaskCount,
+		"repeated_task_ratio":     _density.RepeatedTaskRatio,
+		"tool_call_count":         _density.ToolCallCount,
+		"tool_calls_per_request":  _density.ToolCallsPerRequest,
+		"tool_round_count":        _density.ToolRoundCount,
+		"tool_rounds_per_request": _density.ToolRoundsPerRequest,
+		"tool_output_tokens":      _density.ToolOutputTokens,
+		"yield_low":               _density.YieldLow,
+		"yield_mid":               _density.YieldMid,
+		"yield_high":              _density.YieldHigh,
+		"low":                     _density.Low,
+		"mid":                     _density.Mid,
+		"high":                    _density.High,
+		"first_at":                _density.FirstAt,
+		"last_at":                 _density.LastAt,
+		"truncated":               _density.Truncated,
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// parseKeyDensityWindow 接受秒數或 Go duration（例如 300、5m、1h）。
+func parseKeyDensityWindow(_value string) time.Duration {
+	_value = strings.TrimSpace(_value)
+	if _value == "" {
+		return defaultKeyDensityWindow
+	}
+	_duration := time.Duration(0)
+	if _seconds, _err := strconv.Atoi(_value); _err == nil {
+		_duration = time.Duration(_seconds) * time.Second
+	} else if _parsed, _err := time.ParseDuration(_value); _err == nil {
+		_duration = _parsed
+	}
+	if _duration <= 0 {
+		return defaultKeyDensityWindow
+	}
+	if _duration > maxKeyDensityWindow {
+		return maxKeyDensityWindow
+	}
+	return _duration
+}
+
+// -------------------------------------------------------------------------------------
+// 綁定數快照的重算間隔：每個請求都掃一次 route map 太浪費，
+// 而上限本來就不需要即時精確。
+const conversationBindingRefreshInterval = 2 * time.Second
+
+// -------------------------------------------------------------------------------------
+// refreshConversationBindings 把目前的對話綁定數與上限同步給 balancer，
+// 讓「已達上限的 provider 不再接新對話」在選擇階段生效。
+func (_h *HTTPAPI) refreshConversationBindings() {
+	if _h == nil || _h.Balancer == nil || _h.Client == nil {
+		return
+	}
+	_h.bindingRefreshLock.Lock()
+	if time.Since(_h.bindingRefreshedAt) < conversationBindingRefreshInterval {
+		_h.bindingRefreshLock.Unlock()
+		return
+	}
+	_h.bindingRefreshedAt = time.Now()
+	_h.bindingRefreshLock.Unlock()
+
+	_limit := _h.currentAdvancedSettings().MaxBindingsPerProvider
+	_h.Balancer.SetConversationBindings(_h.Client.PromptCacheRouteCounts(), _limit)
+}
+
+// -------------------------------------------------------------------------------------
+// advancedSettingsWarning 回傳設定之間互相衝突的提醒（不阻擋儲存）。
+// 綁定上限高於某個 Provider 的最大併發時，該 Provider 被釘住的對話容易撞到併發上限，
+// 進而被判定為不可用而解除黏著、失去推理脈絡。因為每個 Provider 的併發各自設定，
+// 這裡以「啟用中 Provider 的最小併發」為準。
+func (_h *HTTPAPI) advancedSettingsWarning(_settings domain.AdvancedSettingsConfig) string {
+	if _h == nil || _h.Balancer == nil || _settings.MaxBindingsPerProvider <= 0 {
+		return ""
+	}
+
+	_tightestName := ""
+	_tightest := 0
+	for _, _provider := range _h.Balancer.ConfigSnapshot().Providers {
+		if !_provider.Enabled || _provider.MaxConcurrent <= 0 {
+			continue
+		}
+		if _tightest == 0 || int(_provider.MaxConcurrent) < _tightest {
+			_tightest = int(_provider.MaxConcurrent)
+			_tightestName = defaultString(_provider.Name, _provider.ID)
+		}
+	}
+	if _tightest == 0 || _settings.MaxBindingsPerProvider <= _tightest {
+		return ""
+	}
+	return fmt.Sprintf(
+		"綁定上限 %d 高於 Provider「%s」的最大併發 %d：該 Provider 被釘住的對話容易撞到併發上限而被迫降級（失去推理脈絡）。建議調降綁定上限，或提高該 Provider 的最大併發。",
+		_settings.MaxBindingsPerProvider, _tightestName, _tightest,
+	)
+}

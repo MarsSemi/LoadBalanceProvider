@@ -758,6 +758,10 @@
       gap: 14px;
     }
 
+    .demotion-parameter-grid {
+      margin-top: 18px;
+    }
+
     .settings-parameter-note {
       margin: 14px 0 0;
       color: var(--muted);
@@ -1586,6 +1590,41 @@
       color: #fff;
     }
 
+    @media (max-width: 1280px) {
+      .topbar {
+        grid-template-columns: max-content minmax(0, 1fr) max-content;
+        gap: 12px;
+        padding: 0 18px;
+      }
+
+      .nav {
+        justify-self: stretch;
+        justify-content: center;
+        gap: 2px;
+      }
+
+      .nav-link {
+        gap: 5px;
+        padding: 0 9px;
+        font-size: 13px;
+      }
+
+      html:lang(ja) .nav-link {
+        padding: 0 7px;
+        font-size: 12px;
+      }
+    }
+
+    @media (max-width: 1100px) and (min-width: 901px) {
+      .brand-text {
+        display: none;
+      }
+
+      .top-action {
+        font-size: 0;
+      }
+    }
+
     @media (max-width: 900px) {
       .topbar {
         grid-template-columns: 1fr;
@@ -1597,6 +1636,12 @@
       .nav,
       .top-actions {
         justify-self: stretch;
+      }
+
+      .nav {
+        flex-wrap: wrap;
+        overflow: visible;
+        border-radius: 12px;
       }
 
       .top-actions {
@@ -1658,17 +1703,21 @@
         <svg viewBox="0 0 24 24"><path d="M4 19V5"></path><path d="M4 19h16"></path><path d="M8 16v-5"></path><path d="M12 16V8"></path><path d="M16 16v-3"></path></svg>
         儀表版
       </a>
+      <a class="nav-link" href="#usage-density" data-view="usageDensityView">
+        <svg viewBox="0 0 24 24"><path d="M4 19V9"></path><path d="M10 19V5"></path><path d="M16 19v-7"></path><path d="M22 19H2"></path></svg>
+        即時監看
+      </a>
+      <a class="nav-link" href="#system-monitor" data-view="systemMonitorView">
+        <svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"></path><path d="M4 20h16"></path></svg>
+        系統監看
+      </a>
       <a class="nav-link" href="#providers" data-view="providersView">
         <svg viewBox="0 0 24 24"><path d="M12 4v16"></path><path d="M6 8h12"></path><path d="M6 16h12"></path><path d="M8 4h8"></path><path d="M8 20h8"></path></svg>
         模型來源
       </a>
       <a class="nav-link" href="#benchmark" data-view="benchmarkView">
         <svg viewBox="0 0 24 24"><path d="M4 14a8 8 0 0 1 16 0"></path><path d="M12 14l4-4"></path><path d="M5 19h14"></path></svg>
-        基準
-      </a>
-      <a class="nav-link" href="#system-monitor" data-view="systemMonitorView">
-        <svg viewBox="0 0 24 24"><path d="M3 12h4l2-6 4 12 2-6h6"></path><path d="M4 20h16"></path></svg>
-        系統監看
+        基準測試
       </a>
       <a class="nav-link" href="#keys" data-view="keysView">
         <svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"></circle><path d="m11 12 8-8"></path><path d="m15 8 3 3"></path><path d="m17 6 2 2"></path></svg>
@@ -1798,6 +1847,10 @@
 
     <section class="view" id="benchmarkView">
       <iframe class="embedded-frame" title="基準測試" data-src="benchmark.html" loading="lazy"></iframe>
+    </section>
+
+    <section class="view" id="usageDensityView">
+      <iframe class="embedded-frame" title="即時監看" data-src="usage-density.html" loading="lazy"></iframe>
     </section>
 
     <section class="view" id="systemMonitorView">
@@ -1992,11 +2045,77 @@
                       <span>容量冷卻（秒）</span>
                       <input class="text-input" id="providerCapacityCooldownSeconds" type="number" min="1" max="300" step="1" inputmode="numeric">
                     </label>
+                    <label class="field">
+                      <span>每 Provider 綁定上限</span>
+                      <input class="text-input" id="maxBindingsPerProvider" type="number" min="1" max="1000" step="1" inputmode="numeric">
+                    </label>
                   </div>
-                  <p class="settings-parameter-note">route 存在時會優先沿用原 Provider；route 遺失、過期、配額差超過容忍值，或原 Provider 正在容量冷卻中時，會移除舊 continuity 後重新負載平衡。容量冷卻是上游回報限流／容量錯誤後暫停選用該 Provider 的秒數，調短可減少對話被迫降級的機會。設定儲存後立即生效。</p>
+                  <p class="settings-parameter-note">route 存在時會優先沿用原 Provider；route 遺失、過期、配額差超過容忍值，或原 Provider 正在容量冷卻中時，會移除舊 continuity 後重新負載平衡。容量冷卻是上游回報限流／容量錯誤後暫停選用該 Provider 的秒數，調短可減少對話被迫降級的機會。綁定上限是單一 Provider 可同時承載的對話數，達標後新對話會改用其他 Provider；既有綁定不受影響，全部達標時仍會照常選用。設定儲存後立即生效。</p>
                   <div class="settings-actions">
                     <button class="soft-button" type="button" id="reloadAdvancedButton">重新載入</button>
                     <button class="primary-button" type="button" id="saveAdvancedButton">儲存參數</button>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-title">輸出比分級門檻</div>
+                <div class="settings-card-body">
+                  <div class="settings-parameter-grid">
+                    <label class="field">
+                      <span>低輸出上限（%）</span>
+                      <input class="text-input" id="yieldLowMaxPercent" type="number" min="0" max="100" step="0.1" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>中輸出上限（%）</span>
+                      <input class="text-input" id="yieldMidMaxPercent" type="number" min="0" max="100" step="0.1" inputmode="decimal">
+                    </label>
+                  </div>
+                  <p class="settings-parameter-note">輸出比為完成輸出 Token 除以估算輸入 Token。低輸出小於等於低輸出上限；中輸出高於低輸出上限且小於等於中輸出上限；高輸出則高於中輸出上限。低輸出上限必須小於中輸出上限，設定儲存後會立即套用至即時監看統計。</p>
+                  <div class="settings-actions">
+                    <button class="soft-button" type="button" id="reloadYieldThresholdsButton">重新載入</button>
+                    <button class="primary-button" type="button" id="saveYieldThresholdsButton">儲存門檻</button>
+                  </div>
+                </div>
+              </section>
+              <section class="settings-card">
+                <div class="settings-card-title">低推理降級</div>
+                <div class="settings-card-body">
+                  <div class="settings-option-row">
+                    <div>
+                      <div class="settings-option-title">啟用自動降級</div>
+                      <div class="settings-option-copy">請求頻率高、而模型幾乎沒有在推理時，暫時把該金鑰壓到低階模型。推理量是模型自己對任務難度的判斷 —— 推理少代表這份工作不需要強模型。</div>
+                    </div>
+                    <label class="toggle-switch" aria-label="啟用低推理降級">
+                      <input id="lowReasoningDemotionEnabled" type="checkbox">
+                      <span aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="settings-parameter-grid demotion-parameter-grid">
+                    <label class="field">
+                      <span>啟動門檻：當日用量（%）</span>
+                      <input class="text-input" id="lowReasoningDemotionMinDailyUsagePercent" type="number" min="0" max="100" step="0.5" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>觸發頻率（次/分）</span>
+                      <input class="text-input" id="lowReasoningDemotionRequestsPerMin" type="number" min="0.1" max="600" step="0.1" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>推理比門檻（%）</span>
+                      <input class="text-input" id="lowReasoningDemotionReasoningPercent" type="number" min="0" max="100" step="0.5" inputmode="decimal">
+                    </label>
+                    <label class="field">
+                      <span>降級目標等級</span>
+                      <input class="text-input" id="lowReasoningDemotionTargetTier" type="number" min="1" max="10" step="1" inputmode="numeric">
+                    </label>
+                    <label class="field">
+                      <span>降級持續（分鐘）</span>
+                      <input class="text-input" id="lowReasoningDemotionMinutes" type="number" min="1" max="1440" step="1" inputmode="numeric">
+                    </label>
+                  </div>
+                  <p class="settings-parameter-note">當日配額消耗未達啟動門檻之前完全不偵測 —— 配額還充裕時，大量消耗本身不是問題。門檻設 0 表示不設限；今日尚無配額觀測時視為未達標，不會誤啟動。達標後還需兩個條件同時成立才會降級：十五分鐘內的請求頻率達到或超過觸發頻率，且推理佔實際輸出的比例低於門檻。觀察窗是十五分鐘而非即時值，短暫的密集操作會自然過去，使用者有緩衝時間把節奏降下來。上游未回報推理量的模型不會被降級 —— 那代表「量不到」而非「不需要推理」。解除採計時制而非依指標：降級後的模型推理本來就少，若等指標回升會永遠留在低階模型。找不到符合等級的模型時仍會照常選用較高等級，不會讓請求失敗。</p>
+                  <div class="settings-actions">
+                    <button class="soft-button" type="button" id="reloadDemotionButton">重新載入</button>
+                    <button class="primary-button" type="button" id="saveDemotionButton">儲存設定</button>
                   </div>
                 </div>
               </section>
@@ -2221,7 +2340,7 @@
         <div class="key-stats-title-row">
           <div>
             <h2 class="confirm-modal-title" id="providerUsageStatsTitle">每日使用量統計</h2>
-            <p class="key-stats-subtitle" id="providerUsageStatsSubtitle">每日用量 = 當日 00:00 起始可使用量 - 最新可使用量</p>
+            <p class="key-stats-subtitle" id="providerUsageStatsSubtitle">每日用量 = 當日各額度週期的使用量累計</p>
           </div>
           <button class="key-action-icon" type="button" id="closeProviderUsageStatsButton" title="關閉" aria-label="關閉">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
@@ -2246,6 +2365,7 @@
 
   <script>
     const WEB_SESSION_KEY_STORAGE = "lbp.sessionApiKey";
+    const DASHBOARD_CACHE_TTL_MS = 30000;
 
     const state = {
       providers: [],
@@ -2272,7 +2392,17 @@
       advanced: {
         conversationAffinityTTLMinutes: 30,
         conversationAffinityQuotaTolerancePoints: 10,
-        responseRouteMaxEntries: 2000
+        responseRouteMaxEntries: 2000,
+        providerCapacityCooldownSeconds: 10,
+        maxBindingsPerProvider: 8,
+        yieldLowMaxPercent: 2,
+        yieldMidMaxPercent: 20,
+        lowReasoningDemotionEnabled: false,
+        lowReasoningDemotionRequestsPerMin: 8,
+        lowReasoningDemotionReasoningPercent: 10,
+        lowReasoningDemotionTargetTier: 4,
+        lowReasoningDemotionMinutes: 10,
+        lowReasoningDemotionMinDailyUsagePercent: 18
       },
       notification: {
         url: "",
@@ -2303,7 +2433,10 @@
 	      providerUsageStatsRefreshTimer: null,
       providerListScrollLeft: 0,
       providerFilterSignature: "",
-      providerRenderSignature: ""
+      providerRenderSignature: "",
+      dashboardLoadedAt: 0,
+      dashboardInitialized: false,
+      dashboardLoadPromise: null
     };
 
     let chartLibraryPromise = null;
@@ -2416,8 +2549,21 @@
       conversationAffinityQuotaTolerancePoints: document.getElementById("conversationAffinityQuotaTolerancePoints"),
       responseRouteMaxEntries: document.getElementById("responseRouteMaxEntries"),
       providerCapacityCooldownSeconds: document.getElementById("providerCapacityCooldownSeconds"),
+      maxBindingsPerProvider: document.getElementById("maxBindingsPerProvider"),
+      yieldLowMaxPercent: document.getElementById("yieldLowMaxPercent"),
+      yieldMidMaxPercent: document.getElementById("yieldMidMaxPercent"),
+      lowReasoningDemotionEnabled: document.getElementById("lowReasoningDemotionEnabled"),
+      lowReasoningDemotionRequestsPerMin: document.getElementById("lowReasoningDemotionRequestsPerMin"),
+      lowReasoningDemotionReasoningPercent: document.getElementById("lowReasoningDemotionReasoningPercent"),
+      lowReasoningDemotionTargetTier: document.getElementById("lowReasoningDemotionTargetTier"),
+      lowReasoningDemotionMinutes: document.getElementById("lowReasoningDemotionMinutes"),
+      lowReasoningDemotionMinDailyUsagePercent: document.getElementById("lowReasoningDemotionMinDailyUsagePercent"),
+      reloadDemotionButton: document.getElementById("reloadDemotionButton"),
+      saveDemotionButton: document.getElementById("saveDemotionButton"),
       reloadAdvancedButton: document.getElementById("reloadAdvancedButton"),
       saveAdvancedButton: document.getElementById("saveAdvancedButton"),
+      reloadYieldThresholdsButton: document.getElementById("reloadYieldThresholdsButton"),
+      saveYieldThresholdsButton: document.getElementById("saveYieldThresholdsButton"),
       notificationStatusMessage: document.getElementById("notificationStatusMessage"),
       notificationUrl: document.getElementById("notificationUrl"),
       notificationApiKey: document.getElementById("notificationApiKey"),
@@ -2543,22 +2689,45 @@
       return payload;
     }
 
-    async function loadData() {
-      try {
-        const [configs, health, baselines] = await Promise.all([
-          apiRequest("api/provider-configs"),
-          apiRequest("api/health"),
-          apiRequest("api/dashboard-metric-baselines")
-        ]);
-        state.providers = configs.providers || [];
-        state.status = health.providers || [];
-        state.metricBaselines = normalizeMetricBaselines(baselines);
-      } catch (_err) {
-        state.providers = [];
-        state.status = [];
-        state.metricBaselines = { providers: {} };
+    function dashboardCacheIsFresh() {
+      return state.dashboardInitialized && Date.now() - state.dashboardLoadedAt < DASHBOARD_CACHE_TTL_MS;
+    }
+
+    function loadData({ force = false } = {}) {
+      if (!force && dashboardCacheIsFresh()) {
+        return Promise.resolve(true);
       }
-      render();
+      if (state.dashboardLoadPromise) {
+        return state.dashboardLoadPromise;
+      }
+
+      state.dashboardLoadPromise = (async () => {
+        try {
+          const [configs, health, baselines] = await Promise.all([
+            apiRequest("api/provider-configs"),
+            apiRequest("api/health"),
+            apiRequest("api/dashboard-metric-baselines")
+          ]);
+          state.providers = configs.providers || [];
+          state.status = health.providers || [];
+          state.metricBaselines = normalizeMetricBaselines(baselines);
+          state.dashboardLoadedAt = Date.now();
+          state.dashboardInitialized = true;
+          render();
+          return true;
+        } catch (_err) {
+          if (!state.dashboardInitialized) {
+            state.providers = [];
+            state.status = [];
+            state.metricBaselines = { providers: {} };
+            render();
+          }
+          return false;
+        } finally {
+          state.dashboardLoadPromise = null;
+        }
+      })();
+      return state.dashboardLoadPromise;
     }
 
     async function loadVersion() {
@@ -3286,6 +3455,12 @@
       return `${Number.isInteger(number) ? number.toFixed(0) : number.toFixed(1)}%`;
     }
 
+    function usagePercentText(value) {
+      if (value === undefined || value === null || !Number.isFinite(Number(value))) return "";
+      const number = Math.max(0, Number(value));
+      return `${Number.isInteger(number) ? number.toFixed(0) : number.toFixed(1)}%`;
+    }
+
     function firstText(...values) {
       for (const value of values) {
         const text = value === undefined || value === null ? "" : String(value).trim();
@@ -3445,7 +3620,7 @@
         };
       });
       await saveMetricBaselines(providers);
-      await loadData();
+      await loadData({ force: true });
     }
 
     function openResetConfirmModal() {
@@ -3610,7 +3785,7 @@
         const payload = await apiRequest("api/settings/advanced");
         state.advanced = payload.advanced || state.advanced;
         renderAdvancedSettings();
-        els.advancedStatusMessage.textContent = "進階設定已載入。";
+        els.advancedStatusMessage.textContent = payload.warning || "進階設定已載入。";
       } catch (err) {
         renderAdvancedSettings();
         els.advancedStatusMessage.textContent = isUnsupportedEndpointError(err)
@@ -3625,6 +3800,15 @@
       els.conversationAffinityQuotaTolerancePoints.value = advanced.conversationAffinityQuotaTolerancePoints ?? 10;
       els.responseRouteMaxEntries.value = advanced.responseRouteMaxEntries ?? 2000;
       els.providerCapacityCooldownSeconds.value = advanced.providerCapacityCooldownSeconds ?? 10;
+      els.maxBindingsPerProvider.value = advanced.maxBindingsPerProvider ?? 8;
+      els.yieldLowMaxPercent.value = advanced.yieldLowMaxPercent ?? 2;
+      els.yieldMidMaxPercent.value = advanced.yieldMidMaxPercent ?? 20;
+      els.lowReasoningDemotionEnabled.checked = Boolean(advanced.lowReasoningDemotionEnabled);
+      els.lowReasoningDemotionRequestsPerMin.value = advanced.lowReasoningDemotionRequestsPerMin ?? 8;
+      els.lowReasoningDemotionReasoningPercent.value = advanced.lowReasoningDemotionReasoningPercent ?? 10;
+      els.lowReasoningDemotionTargetTier.value = advanced.lowReasoningDemotionTargetTier ?? 4;
+      els.lowReasoningDemotionMinutes.value = advanced.lowReasoningDemotionMinutes ?? 10;
+      els.lowReasoningDemotionMinDailyUsagePercent.value = advanced.lowReasoningDemotionMinDailyUsagePercent ?? 18;
     }
 
     function advancedSettingsInput() {
@@ -3632,7 +3816,8 @@
         conversationAffinityTTLMinutes: Number(els.conversationAffinityTTLMinutes.value),
         conversationAffinityQuotaTolerancePoints: Number(els.conversationAffinityQuotaTolerancePoints.value),
         responseRouteMaxEntries: Number(els.responseRouteMaxEntries.value),
-        providerCapacityCooldownSeconds: Number(els.providerCapacityCooldownSeconds.value)
+        providerCapacityCooldownSeconds: Number(els.providerCapacityCooldownSeconds.value),
+        maxBindingsPerProvider: Number(els.maxBindingsPerProvider.value)
       };
       if (!Number.isInteger(settings.conversationAffinityTTLMinutes) || settings.conversationAffinityTTLMinutes < 1 || settings.conversationAffinityTTLMinutes > 10080) {
         throw new Error("對話黏著時間必須是 1 到 10080 分鐘的整數。");
@@ -3645,6 +3830,9 @@
       }
       if (!Number.isInteger(settings.providerCapacityCooldownSeconds) || settings.providerCapacityCooldownSeconds < 1 || settings.providerCapacityCooldownSeconds > 300) {
         throw new Error("容量冷卻必須是 1 到 300 秒的整數。");
+      }
+      if (!Number.isInteger(settings.maxBindingsPerProvider) || settings.maxBindingsPerProvider < 1 || settings.maxBindingsPerProvider > 1000) {
+        throw new Error("每 Provider 綁定上限必須是 1 到 1000 的整數。");
       }
       return settings;
     }
@@ -3668,11 +3856,113 @@
         });
         state.advanced = payload.advanced || settings;
         renderAdvancedSettings();
-        els.advancedStatusMessage.textContent = "進階設定已儲存並立即生效。";
+        // 警告不阻擋儲存（每個 Provider 的併發各自設定，這只是建議值）。
+        els.advancedStatusMessage.textContent = payload.warning
+          ? "已儲存並立即生效。" + payload.warning
+          : "進階設定已儲存並立即生效。";
       } catch (err) {
         els.advancedStatusMessage.textContent = err.message || "儲存進階設定失敗。";
       } finally {
         els.saveAdvancedButton.disabled = false;
+      }
+    }
+
+    function yieldThresholdSettingsInput() {
+      const settings = {
+        yieldLowMaxPercent: Number(els.yieldLowMaxPercent.value),
+        yieldMidMaxPercent: Number(els.yieldMidMaxPercent.value)
+      };
+      if (!Number.isFinite(settings.yieldLowMaxPercent) || settings.yieldLowMaxPercent < 0 || settings.yieldLowMaxPercent > 100) {
+        throw new Error("低輸出上限必須介於 0% 到 100%。");
+      }
+      if (!Number.isFinite(settings.yieldMidMaxPercent) || settings.yieldMidMaxPercent < 0 || settings.yieldMidMaxPercent > 100) {
+        throw new Error("中輸出上限必須介於 0% 到 100%。");
+      }
+      if (settings.yieldLowMaxPercent >= settings.yieldMidMaxPercent) {
+        throw new Error("低輸出上限必須小於中輸出上限。");
+      }
+      return settings;
+    }
+
+    async function saveYieldThresholdSettings() {
+      let settings;
+      try {
+        settings = yieldThresholdSettingsInput();
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message;
+        return;
+      }
+
+      els.saveYieldThresholdsButton.disabled = true;
+      els.advancedStatusMessage.textContent = "輸出比分級門檻儲存中。";
+      try {
+        const payload = await apiRequest("api/settings/advanced", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings)
+        });
+        state.advanced = payload.advanced || { ...(state.advanced || {}), ...settings };
+        renderAdvancedSettings();
+        els.advancedStatusMessage.textContent = "輸出比分級門檻已儲存並立即生效。";
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message || "儲存輸出比分級門檻失敗。";
+      } finally {
+        els.saveYieldThresholdsButton.disabled = false;
+      }
+    }
+
+    function demotionSettingsInput() {
+      const settings = {
+        lowReasoningDemotionEnabled: els.lowReasoningDemotionEnabled.checked,
+        lowReasoningDemotionRequestsPerMin: Number(els.lowReasoningDemotionRequestsPerMin.value),
+        lowReasoningDemotionReasoningPercent: Number(els.lowReasoningDemotionReasoningPercent.value),
+        lowReasoningDemotionTargetTier: Number(els.lowReasoningDemotionTargetTier.value),
+        lowReasoningDemotionMinutes: Number(els.lowReasoningDemotionMinutes.value),
+        lowReasoningDemotionMinDailyUsagePercent: Number(els.lowReasoningDemotionMinDailyUsagePercent.value)
+      };
+      if (!Number.isFinite(settings.lowReasoningDemotionRequestsPerMin) || settings.lowReasoningDemotionRequestsPerMin < 0.1 || settings.lowReasoningDemotionRequestsPerMin > 600) {
+        throw new Error("觸發頻率必須介於 0.1 到 600 次/分。");
+      }
+      if (!Number.isFinite(settings.lowReasoningDemotionReasoningPercent) || settings.lowReasoningDemotionReasoningPercent < 0 || settings.lowReasoningDemotionReasoningPercent > 100) {
+        throw new Error("推理比門檻必須介於 0% 到 100%。");
+      }
+      if (!Number.isInteger(settings.lowReasoningDemotionTargetTier) || settings.lowReasoningDemotionTargetTier < 1 || settings.lowReasoningDemotionTargetTier > 10) {
+        throw new Error("降級目標等級必須是 1 到 10 的整數。");
+      }
+      if (!Number.isInteger(settings.lowReasoningDemotionMinutes) || settings.lowReasoningDemotionMinutes < 1 || settings.lowReasoningDemotionMinutes > 1440) {
+        throw new Error("降級持續必須是 1 到 1440 分鐘的整數。");
+      }
+      if (!Number.isFinite(settings.lowReasoningDemotionMinDailyUsagePercent) || settings.lowReasoningDemotionMinDailyUsagePercent < 0 || settings.lowReasoningDemotionMinDailyUsagePercent > 100) {
+        throw new Error("啟動門檻必須介於 0% 到 100%。");
+      }
+      return settings;
+    }
+
+    async function saveDemotionSettings() {
+      let settings;
+      try {
+        settings = demotionSettingsInput();
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message;
+        return;
+      }
+
+      els.saveDemotionButton.disabled = true;
+      els.advancedStatusMessage.textContent = "低推理降級設定儲存中。";
+      try {
+        const payload = await apiRequest("api/settings/advanced", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settings)
+        });
+        state.advanced = payload.advanced || { ...(state.advanced || {}), ...settings };
+        renderAdvancedSettings();
+        // 儲存會一併解除既有降級，避免舊門檻造成的降級活到計時器到期。
+        els.advancedStatusMessage.textContent = "低推理降級設定已儲存，既有降級已解除。";
+      } catch (err) {
+        els.advancedStatusMessage.textContent = err.message || "儲存低推理降級設定失敗。";
+      } finally {
+        els.saveDemotionButton.disabled = false;
       }
     }
 
@@ -4273,7 +4563,7 @@
 
     function openProviderUsageStatsModal() {
       state.providerUsageStatsMonth = currentMonthString();
-      els.providerUsageStatsSubtitle.textContent = "每日用量 = 當日 00:00 起始可使用量 - 最新可使用量";
+      els.providerUsageStatsSubtitle.textContent = "每日用量 = 當日各額度週期的使用量累計";
       els.providerUsageStatsModal.hidden = false;
       els.providerUsageStatsModal.classList.add("active");
       void loadProviderUsageStats();
@@ -4311,7 +4601,7 @@
         if (await renderProviderUsageChart(payload)) {
           const providerCount = Number(payload?.provider_count || 0);
           const observedDays = Number(payload?.observed_days || 0);
-	          els.providerUsageStatsSubtitle.textContent = `已啟用 ${providerCount} 個 Provider；每日用量 = 當日 00:00 起始可使用量 - 最新可使用量`;
+	          els.providerUsageStatsSubtitle.textContent = `已啟用 ${providerCount} 個 Provider；每日用量 = 當日各額度週期的使用量累計`;
 	          els.providerUsageStatsMessage.textContent = observedDays > 0
 	            ? `${month} 已記錄 ${observedDays} 天額度資料；當日數值會隨最新用量動態更新，23:59 後完成結算。`
             : `${month} 尚無 Provider 額度紀錄。`;
@@ -4380,7 +4670,7 @@
                   const item = dailyUsage.get(date);
                   if (!item) return "尚無額度紀錄";
 	                  const remainingLabel = item.completed ? "23:59 剩餘" : "目前剩餘";
-	                  return `日用量 ${percentText(item.usage)}，${remainingLabel} ${percentText(item.remaining)}（${item.providerCount} 個 Provider）`;
+	                  return `日用量 ${usagePercentText(item.usage)}，${remainingLabel} ${percentText(item.remaining)}（${item.providerCount} 個 Provider）`;
                 }
               }
             }
@@ -4486,7 +4776,14 @@
       }
       const embeddedLoad = ensureEmbeddedViewLoaded(viewId);
       if (viewId === "dashboardView") {
-        return loadData();
+        if (state.dashboardInitialized) {
+          render();
+          if (!dashboardCacheIsFresh()) {
+            void loadData({ force: true });
+          }
+          return Promise.resolve();
+        }
+        return loadData({ force: true });
       }
       if (viewId === "settingsView") {
         return activateSettingsPage("generalSettings");
@@ -4512,10 +4809,22 @@
       });
     }
 
+    function viewNeedsLoadingDialog(viewId) {
+      if (viewId === "dashboardView") {
+        return !state.dashboardInitialized;
+      }
+      if (viewId === "settingsView") {
+        return true;
+      }
+      const frame = document.querySelector(`#${viewId} iframe[data-src]`);
+      return Boolean(frame && frame.dataset.loaded !== "true");
+    }
+
     function initialViewId() {
       if (window.location.hash === "#providers") return "providersView";
       if (window.location.hash === "#benchmark") return "benchmarkView";
       if (window.location.hash === "#system-monitor") return "systemMonitorView";
+      if (window.location.hash === "#usage-density") return "usageDensityView";
       if (window.location.hash === "#keys") return "keysView";
       if (window.location.hash === "#settings") return "settingsView";
       return "dashboardView";
@@ -4524,10 +4833,13 @@
     document.querySelectorAll("[data-view]").forEach(link => {
       link.addEventListener("click", event => {
         event.preventDefault();
-        void withLoadingDialog(
-          () => activateView(link.dataset.view, link.getAttribute("href")),
-          "正在取得頁面資訊..."
-        );
+        const viewId = link.dataset.view;
+        const activate = () => activateView(viewId, link.getAttribute("href"));
+        if (viewNeedsLoadingDialog(viewId)) {
+          void withLoadingDialog(activate, "正在取得頁面資訊...");
+        } else {
+          void activate();
+        }
       });
     });
 
@@ -4605,6 +4917,15 @@
       void withLoadingDialog(loadAdvancedSettings, "正在重新載入進階設定...");
     });
     els.saveAdvancedButton.addEventListener("click", saveAdvancedSettings);
+    els.reloadYieldThresholdsButton.addEventListener("click", () => {
+      void withLoadingDialog(loadAdvancedSettings, "正在重新載入輸出比分級門檻...");
+    });
+    els.saveYieldThresholdsButton.addEventListener("click", saveYieldThresholdSettings);
+    els.reloadDemotionButton.addEventListener("click", () => {
+      renderAdvancedSettings();
+      els.advancedStatusMessage.textContent = "已重新載入低推理降級設定。";
+    });
+    els.saveDemotionButton.addEventListener("click", saveDemotionSettings);
     els.toggleNotificationTarget.addEventListener("click", toggleNotificationCard);
     els.reloadNotificationButton.addEventListener("click", () => {
       void withLoadingDialog(loadNotificationSettings, "正在重新載入通知設定...");

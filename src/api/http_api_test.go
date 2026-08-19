@@ -19,6 +19,7 @@ import (
 	"LoadBalanceProvider/src/auth"
 	"LoadBalanceProvider/src/balancer"
 	"LoadBalanceProvider/src/domain"
+	"LoadBalanceProvider/src/keyusage"
 	"LoadBalanceProvider/src/providerusage"
 	"LoadBalanceProvider/src/proxy"
 )
@@ -559,7 +560,10 @@ func TestAdvancedSettingsHandlersPersistValues(t *testing.T) {
 		"conversationAffinityTTLMinutes":45,
 		"conversationAffinityQuotaTolerancePoints":12.5,
 		"responseRouteMaxEntries":3500,
-		"providerCapacityCooldownSeconds":25
+		"providerCapacityCooldownSeconds":25,
+		"maxBindingsPerProvider":7,
+		"yieldLowMaxPercent":3.5,
+		"yieldMidMaxPercent":24
 	}`))
 	if _recorder.Code != http.StatusOK {
 		t.Fatalf("save status = %d body=%s", _recorder.Code, _recorder.Body.String())
@@ -579,7 +583,10 @@ func TestAdvancedSettingsHandlersPersistValues(t *testing.T) {
 	if _payload.Advanced.ConversationAffinityTTLMinutes != 45 ||
 		_payload.Advanced.ConversationAffinityQuotaTolerancePoints != 12.5 ||
 		_payload.Advanced.ResponseRouteMaxEntries != 3500 ||
-		_payload.Advanced.ProviderCapacityCooldownSeconds != 25 {
+		_payload.Advanced.ProviderCapacityCooldownSeconds != 25 ||
+		_payload.Advanced.MaxBindingsPerProvider != 7 ||
+		_payload.Advanced.YieldLowMaxPercent != 3.5 ||
+		_payload.Advanced.YieldMidMaxPercent != 24 {
 		t.Fatalf("advanced settings = %#v", _payload.Advanced)
 	}
 }
@@ -1292,5 +1299,228 @@ func TestRenderableMCPImageMIMEClassification(t *testing.T) {
 		if isRenderableMCPImageMIME(_mime) {
 			t.Fatalf("%s must not be treated as renderable", _mime)
 		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 複雜度只在有已驗證金鑰時記錄，且分級正確。
+func TestNoteKeyRequestComplexityRecordsPerKey(t *testing.T) {
+	_root := filepath.Join(t.TempDir(), "usage")
+	_previous := keyusage.SetDefaultRecorderForTest(keyusage.NewRecorder(_root))
+	defer keyusage.SetDefaultRecorderForTest(_previous)
+
+	_request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	_request = _request.WithContext(context.WithValue(_request.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		ID: "key-observed", KeyType: auth.APIKeyTypeChat,
+	}))
+
+	noteKeyRequestComplexity(_request, domain.RequestProfile{ComplexityScore: 2})
+	noteKeyRequestComplexity(_request, domain.RequestProfile{ComplexityScore: 2})
+	noteKeyRequestComplexity(_request, domain.RequestProfile{ComplexityScore: 8})
+
+	_density := keyusage.DefaultRecorder().RequestDensity("key-observed", time.Minute)
+	if _density.Count != 3 || _density.Low.Count != 2 || _density.High.Count != 1 {
+		t.Fatalf("density = %#v", _density)
+	}
+
+	// 沒有金鑰的請求不得產生紀錄
+	_anonymous := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	noteKeyRequestComplexity(_anonymous, domain.RequestProfile{ComplexityScore: 1})
+	if _other := keyusage.DefaultRecorder().RequestDensity("", time.Minute); _other.Count != 0 {
+		t.Fatalf("anonymous request should not be recorded: %#v", _other)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 密集度端點：列出全部金鑰（含沒有流量的），依請求數排序。
+func TestAPIKeyDensityEndpointListsAllKeys(t *testing.T) {
+	_usageRoot := filepath.Join(t.TempDir(), "usage")
+	_previousRecorder := keyusage.SetDefaultRecorderForTest(keyusage.NewRecorder(_usageRoot))
+	defer keyusage.SetDefaultRecorderForTest(_previousRecorder)
+
+	_store := auth.NewAPIKeyStore(filepath.Join(t.TempDir(), "api_keys.json"))
+	_previousStore := auth.SetDefaultStoreForTest(_store)
+	defer auth.SetDefaultStoreForTest(_previousStore)
+
+	_busy, _err := _store.Create("Busy Key")
+	if _err != nil {
+		t.Fatal(_err)
+	}
+	if _, _err := _store.Create("Idle Key"); _err != nil {
+		t.Fatal(_err)
+	}
+
+	_now := time.Now()
+	for _idx := 0; _idx < 4; _idx++ {
+		_ = keyusage.DefaultRecorder().RecordComplexity(_busy.ID, _now, 2)
+	}
+	_ = keyusage.DefaultRecorder().RecordRequest(_busy.ID, _now, keyusage.RequestSample{
+		Complexity:       9,
+		Continuation:     true,
+		Fingerprint:      "repeat",
+		ToolCalls:        1,
+		ToolRounds:       1,
+		ToolOutputTokens: 40,
+	})
+
+	_handler := &HTTPAPI{}
+	_recorder := httptest.NewRecorder()
+	_handler.handleGetAPIKeyDensity(_recorder, "5m")
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+
+	var _payload struct {
+		WindowSeconds float64 `json:"window_seconds"`
+		TotalRequests int     `json:"total_requests"`
+		Keys          []struct {
+			Name  string `json:"name"`
+			Count int    `json:"count"`
+			Low   struct {
+				Count int `json:"count"`
+			} `json:"low"`
+			High struct {
+				Count int `json:"count"`
+			} `json:"high"`
+			ToolCallCount     int     `json:"tool_call_count"`
+			ContinuationRatio float64 `json:"continuation_ratio"`
+			RepeatedTaskRatio float64 `json:"repeated_task_ratio"`
+		} `json:"keys"`
+	}
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.WindowSeconds != 300 || _payload.TotalRequests != 5 {
+		t.Fatalf("window=%v total=%d", _payload.WindowSeconds, _payload.TotalRequests)
+	}
+	if len(_payload.Keys) != 2 {
+		t.Fatalf("keys = %#v, want both the busy and the idle key", _payload.Keys)
+	}
+	if _payload.Keys[0].Name != "Busy Key" || _payload.Keys[0].Count != 5 {
+		t.Fatalf("busiest key should sort first: %#v", _payload.Keys[0])
+	}
+	if _payload.Keys[0].Low.Count != 4 || _payload.Keys[0].High.Count != 1 {
+		t.Fatalf("tier split = %#v", _payload.Keys[0])
+	}
+	if _payload.Keys[0].ToolCallCount != 1 || _payload.Keys[0].ContinuationRatio != 0.2 {
+		t.Fatalf("activity telemetry = %#v", _payload.Keys[0])
+	}
+	if _payload.Keys[1].Count != 0 {
+		t.Fatalf("idle key should be listed with zero count: %#v", _payload.Keys[1])
+	}
+
+	// 這份清單不得洩漏任何金鑰識別資訊。
+	_body := _recorder.Body.String()
+	for _, _leak := range []string{_busy.ID, _busy.Prefix, "masked_key", "\"id\"", "prefix"} {
+		if _leak != "" && strings.Contains(_body, _leak) {
+			t.Fatalf("density response must not expose %q: %s", _leak, _body)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 這是管理端點：Chat 金鑰不得存取。
+func TestAPIKeyDensityRouteIsAdminOnly(t *testing.T) {
+	if !isAPIKeyDensityRoute("/api/api-keys/density") || !isAPIKeyDensityRoute("/v1/api-keys/density") {
+		t.Fatal("density route should be recognised")
+	}
+	_chatKey := auth.APIKeyView{KeyType: auth.APIKeyTypeChat}
+	if canAccessRoute(_chatKey, false, http.MethodGet, "/api/api-keys/density") {
+		t.Fatal("chat keys must not reach the density endpoint")
+	}
+	_session := auth.APIKeyView{Temporary: true}
+	if !canAccessRoute(_session, true, http.MethodGet, "/api/api-keys/density") {
+		t.Fatal("web session should reach the density endpoint")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+func TestParseKeyDensityWindow(t *testing.T) {
+	for _input, _want := range map[string]time.Duration{
+		"":      defaultKeyDensityWindow,
+		"bogus": defaultKeyDensityWindow,
+		"0":     defaultKeyDensityWindow,
+		"300":   5 * time.Minute,
+		"5m":    5 * time.Minute,
+		"24h":   maxKeyDensityWindow,
+		"-10":   defaultKeyDensityWindow,
+		"1h30m": maxKeyDensityWindow,
+		"90s":   90 * time.Second,
+	} {
+		if _got := parseKeyDensityWindow(_input); _got != _want {
+			t.Fatalf("window %q → %s, want %s", _input, _got, _want)
+		}
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 金鑰強制指定的 provider 是管理員政策，不得為了避開故障而擅自更換；
+// 對話黏著造成的綁定則可以解除。
+func TestConversationPinReleasableOnlyWhenNotKeyForced(t *testing.T) {
+	_handler := &HTTPAPI{}
+
+	_forced := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_forced = _forced.WithContext(context.WithValue(_forced.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType: auth.APIKeyTypeChat, ProviderID: "provider-a", Model: "AUTO", ReasoningEffort: "AUTO",
+	}))
+	if _handler.conversationPinIsReleasable(_forced) {
+		t.Fatal("a key-forced provider must not be swapped away")
+	}
+
+	_auto := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	_auto = _auto.WithContext(context.WithValue(_auto.Context(), requestAPIKeyContextKey{}, auth.APIKeyView{
+		KeyType: auth.APIKeyTypeChat, ProviderID: "AUTO", Model: "AUTO", ReasoningEffort: "AUTO",
+	}))
+	if !_handler.conversationPinIsReleasable(_auto) {
+		t.Fatal("an affinity pin should be releasable")
+	}
+
+	if !_handler.conversationPinIsReleasable(httptest.NewRequest(http.MethodPost, "/v1/responses", nil)) {
+		t.Fatal("requests without a key policy should be releasable")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 綁定上限高於某個 Provider 的最大併發時要提醒，但不得阻擋儲存。
+func TestAdvancedSettingsWarnsWhenBindingCapExceedsConcurrency(t *testing.T) {
+	_handler := &HTTPAPI{
+		Client:                     proxy.NewClient(),
+		AdvancedSettingsConfigPath: filepath.Join(t.TempDir(), "advanced_settings.json"),
+		Balancer: balancer.NewLoadBalancer(&domain.ProxyConfig{Providers: []domain.LLMProviderConfig{
+			{ID: "roomy", Name: "Roomy", Enabled: true, MaxConcurrent: 16},
+			{ID: "tight", Name: "Tight One", Enabled: true, MaxConcurrent: 4},
+			{ID: "off", Name: "Disabled", Enabled: false, MaxConcurrent: 1},
+		}}),
+	}
+
+	_recorder := httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"maxBindingsPerProvider":8}`))
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("warning must not block saving: status=%d body=%s", _recorder.Code, _recorder.Body.String())
+	}
+
+	var _payload struct {
+		Warning  string               `json:"warning"`
+		Advanced AdvancedSettingsForm `json:"advanced"`
+	}
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.Advanced.MaxBindingsPerProvider != 8 {
+		t.Fatalf("value should still be saved: %#v", _payload.Advanced)
+	}
+	// 以「啟用中最小併發」為準，停用的 Provider 不列入
+	if !strings.Contains(_payload.Warning, "Tight One") || !strings.Contains(_payload.Warning, "4") {
+		t.Fatalf("warning should name the tightest enabled provider: %q", _payload.Warning)
+	}
+
+	// 調到不超過最小併發就不該再警告
+	_recorder = httptest.NewRecorder()
+	_handler.handleSaveAdvancedSettings(_recorder, []byte(`{"maxBindingsPerProvider":4}`))
+	if _err := json.Unmarshal(_recorder.Body.Bytes(), &_payload); _err != nil {
+		t.Fatal(_err)
+	}
+	if _payload.Warning != "" {
+		t.Fatalf("no warning expected at or below the tightest concurrency: %q", _payload.Warning)
 	}
 }

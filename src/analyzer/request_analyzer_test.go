@@ -96,3 +96,40 @@ func containsString(_items []string, _target string) bool {
 	}
 	return false
 }
+
+// -------------------------------------------------------------------------------------
+// 短輸入 + 高推理程度實際上很耗配額，不能只看長度而判成低階請求。
+func TestComplexityScoreAccountsForReasoningEffort(t *testing.T) {
+	_analyzer := New()
+	_short := "幫我看一下"
+
+	_plain := _analyzer.ScoreComplexity(len([]rune(_short)), 512, 1, nil, "")
+	_xhigh := _analyzer.ScoreComplexity(len([]rune(_short)), 512, 1, nil, "xhigh")
+	if _xhigh <= _plain {
+		t.Fatalf("xhigh effort should score higher: plain=%d xhigh=%d", _plain, _xhigh)
+	}
+	if _xhigh-_plain != 3 {
+		t.Fatalf("xhigh should add 3 points, got %d", _xhigh-_plain)
+	}
+	if _high := _analyzer.ScoreComplexity(len([]rune(_short)), 512, 1, nil, "HIGH"); _high-_plain != 2 {
+		t.Fatalf("high should add 2 points regardless of case, got %d", _high-_plain)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 兩種寫法都要認得：頂層 reasoning_effort 與 Responses 的 reasoning.effort。
+func TestAnalyzeReadsReasoningEffortFromBothShapes(t *testing.T) {
+	_analyzer := New()
+	_messages := []domain.ChatMessage{{Role: "user", Content: "hi"}}
+
+	_flat := _analyzer.Analyze(&domain.ChatCompletionRequest{Messages: _messages, ReasoningEffort: "xhigh"})
+	_nested := _analyzer.Analyze(&domain.ChatCompletionRequest{Messages: _messages, Reasoning: map[string]interface{}{"effort": "xhigh"}})
+	_none := _analyzer.Analyze(&domain.ChatCompletionRequest{Messages: _messages})
+
+	if _flat.ComplexityScore != _nested.ComplexityScore {
+		t.Fatalf("both shapes should score the same: flat=%d nested=%d", _flat.ComplexityScore, _nested.ComplexityScore)
+	}
+	if _flat.ComplexityScore <= _none.ComplexityScore {
+		t.Fatalf("effort should raise the score: with=%d without=%d", _flat.ComplexityScore, _none.ComplexityScore)
+	}
+}

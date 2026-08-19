@@ -12,6 +12,7 @@
 - **智慧路由**：依照輸入 token 估算、輸出需求、訊息數、任務類型與模型能力進行分數式選擇。
 - **一般與串流支援**：非 streaming 以一般 HTTP response 轉回，`stream=true` 時維持 SSE/Chunked 轉送。
 - **負載平衡**：以 provider 權重、模型品質、成本、目前 active request 與 max concurrent 做通用評分。
+- **請求密度與輸出結構監看**：依 API 金鑰統計近期請求頻率、Token 消耗、模型等級、輸入／輸出比、正文比例與推理比例，協助辨識大量低輸出請求或高階模型使用不當的帳號。
 - **標準 MCP**：提供 MCP `2025-11-25` Streamable HTTP 端點，將金鑰管理以外的查詢與操作公開為工具。
 
 ## 目錄結構
@@ -24,6 +25,8 @@
 - `src/config/provider_config.go`：讀取 `data/llm_proxy.json` 的 LLM Proxy 設定並套用預設值。
 - `src/analyzer/request_analyzer.go`：估算請求大小、輸出工作量、任務類型與複雜度。
 - `src/balancer/load_balancer.go`：候選 Provider/Model 過濾、評分與即時負載統計。
+- `src/keyusage/recorder.go`：API 金鑰每月用量，以及最近一小時的請求密度與 Token 消耗統計。
+- `src/telemetry/request.go`：從 Chat／Responses 請求抽取工具呼叫、工具輪次、工具輸出量、續接與重複任務訊號。
 - `src/proxy/client.go`：OpenAI-compatible Chat Completion HTTP 轉發與串流代理。
 - `agent.properties`：MarsCloud 服務設定。
 - `data/llm_proxy.json`：LLM Provider、模型能力與負載平衡設定。
@@ -87,6 +90,15 @@ Responses 長任務通常包含多輪推理、工具呼叫或加密 reasoning �
 - **黏著配額容忍值**：預設 `10` 個百分點；原 Provider 配額低於同儕平均超過此值時，允許解除黏著並重新選擇。
 - **Response 路由上限**：預設 `2000` 筆，可設定 `100` 至 `100000` 筆；超過上限時會淘汰較舊的路由。
 
+#### 每金鑰低推理降級
+
+「設定 > 進階 > 低推理降級」可在整體 Provider 配額開始消耗後，暫時限制高頻、低推理 API 金鑰可選模型的品質等級。功能預設關閉，設定保存在 `data/advanced_settings.json`。
+
+- 啟動閘門採所有啟用且有觀測資料的 Provider 當日配額消耗平均值，預設達 `18%` 才開始評估；這不是單一 API 金鑰的當日用量。門檻設為 `0` 可停用閘門，尚無配額資料時不會啟動。
+- 每支 API 金鑰使用最近 `15` 分鐘的滾動窗口。預設須同時滿足 `≥8 req/min`、推理 Token 佔實際輸出 `<10%`，且至少有 `5` 筆上游確實回報推理量的完成樣本。
+- 符合條件後，預設將模型品質等級上限設為 `4`、維持 `10` 分鐘；到期後解除並重新觀察。設定變更或服務重啟會清除記憶體中的降級狀態。
+- 降級目前是候選模型的品質上限，不會改寫呼叫端明確指定的模型或金鑰強制路由。若沒有符合上限的候選，負載平衡器會 fail-open 選用較高等級模型，避免回傳無可用 Provider。
+
 若要讓同一個長任務穩定命中既有 Prompt Cache，Client 應在整段任務期間持續使用相同的 `prompt_cache_key`，不同任務則使用不同且穩定的識別值。
 
 ### 健康檢查
@@ -95,6 +107,28 @@ Responses 長任務通常包含多輪推理、工具呼叫或加密 reasoning �
 GET /api/health
 GET /api/providers
 ```
+
+### 請求密度監看
+
+管理介面的「即時監看」頁面會依 API 金鑰顯示近期使用情形，包括總請求、每分鐘請求、完成請求的 Token 總數、每請求平均 Token、實際使用模型的平均品質等級、輸出比、正文比、推理比，以及低／中／高輸出與需求複雜度分布。API 另提供工具呼叫、工具輪次、工具輸出量、續接比例與重複任務比例，供後續異常偵測及模型降級策略使用。頁面每 `60` 秒背景更新；觀察視窗、帳號狀態與顯示欄位會保存在目前瀏覽器。
+
+```http
+GET /api/api-keys/density?window=15m
+```
+
+- `window` 接受秒數或 Go duration，例如 `60`、`5m`、`1h`；預設 `5m`，上限 `1h`。
+- **輸出比**為實際完成輸出 Token ÷ 估算輸入 Token。輸出 Token 包含上游回報的正文、推理與工具呼叫參數；輸入量未知的完成請求不列入輸出比分級。預設 `≤2%` 為低輸出、`>2%` 且 `≤20%` 為中輸出、`>20%` 為高輸出；管理員可在「設定 > 進階 > 輸出比分級門檻」調整兩個分界，儲存後即時監看會立即套用。
+- 介面的輸出比主值採用逐筆比值的中位數 `output_ratio_median`，避免單一超大 Context 主導結果；副值「總和」為視窗內總輸出 Token ÷ 總估算輸入 Token，即 `output_ratio`。
+- **正文比**為可辨識的使用者可見文字估算 Token ÷ 該請求實際完成輸出 Token。介面主值使用逐筆中位數 `prose_ratio_median`，副值使用總和比例 `prose_ratio`。只有能從回應事件或輸出項目拆出用途的完成請求才納入，讀取端必須同時檢查 `prose_samples`；沒有樣本不等於正文比為 `0%`。
+- **推理比** `reasoning_ratio` 為上游回報的推理 Token `reasoning_tokens` ÷ 實際完成輸出 Token。推理 Token 已包含在完成輸出量內，此欄位是輸出結構的拆分，不可再次加到總輸出 Token。
+- 模型等級是完成請求實際使用模型之 `quality_tier` 加權平均；將高模型等級與極低輸出比並列，可協助找出以高階模型重複執行低輸出工作的帳號。
+- 工具行為只保留可直接驗證的聚合數據：`tool_call_count`、`tool_calls_per_request`、`tool_round_count`、`tool_rounds_per_request` 與 `tool_output_tokens`。舊版 `os_tool_ratio`、`tool_type_counts` 與 OS 工具分類已移除，不應再由名稱推測工具用途。
+- 重複任務以最後一筆 User 文字正規化後的 SHA-256 指紋判斷；不保存原始提示詞。輸出比分級維持純粹的 Token 比例，不會因工具操作而改變，降級策略應組合輸出結構、模型等級、工具輪次、續接與重複任務等多項指標判斷。
+- 複雜度分數 `1–3` 為低需求、`4–6` 為中需求、`7–10` 為高需求；無有效分數時歸入低需求。
+- 請求頻率在請求完成分類後記錄；Token 消耗只統計已完成並取得實際用量的請求，因此兩者母體可能不同。
+- 最近一小時的逐筆樣本與任務指紋只保存在記憶體，服務重新啟動後會重新累積；每月請求與活動彙總仍會連同既有統計保存在 `usage/<key>/YYYY-MM.json`。
+- 回應會列出無流量、停用及視窗內已刪除的金鑰，但只提供名稱與聚合數據，不回傳 Key ID、前綴或遮罩金鑰。
+- 此端點僅供 Web 管理登入使用；一般 API 金鑰與 MCP 金鑰不能存取。
 
 ## MCP
 
