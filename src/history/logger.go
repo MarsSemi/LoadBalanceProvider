@@ -34,6 +34,7 @@ type Logger struct {
 	_days            map[string]DayFile
 	_dirty           map[string]bool
 	_flushTimer      *time.Timer
+	_fallbackLock    sync.Mutex
 	_fallbackCache   map[string]ProviderMetricFallback
 	_fallbackExpires time.Time
 }
@@ -348,14 +349,18 @@ func (_l *Logger) RecentProviderMetricFallbacks() map[string]ProviderMetricFallb
 		return map[string]ProviderMetricFallback{}
 	}
 
-	_l._lock.Lock()
-	defer _l._lock.Unlock()
+	_l._fallbackLock.Lock()
+	defer _l._fallbackLock.Unlock()
 	_now := time.Now()
 	if _now.Before(_l._fallbackExpires) && _l._fallbackCache != nil {
 		return cloneProviderMetricFallbacks(_l._fallbackCache)
 	}
-	if _err := _l.flushLocked(); _err != nil {
-		log.Printf("chat history flush before metrics scan failed: %v", _err)
+	_l._lock.Lock()
+	_flushErr := _l.flushLocked()
+	_l._lock.Unlock()
+	// 歷史檔採原子替換，掃描可在寫入鎖外進行，避免阻擋新請求紀錄。
+	if _flushErr != nil {
+		log.Printf("chat history flush before metrics scan failed: %v", _flushErr)
 	}
 
 	_result := map[string]ProviderMetricFallback{}

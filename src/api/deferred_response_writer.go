@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // -------------------------------------------------------------------------------------
@@ -13,13 +14,23 @@ const deferredResponseBufferLimit = 2 * 1024 * 1024
 
 // -------------------------------------------------------------------------------------
 type deferredResponseWriter struct {
+	// lock 保護所有狀態：保活心跳由另一個 goroutine 送出，與轉發同時進行。
+	lock       sync.Mutex
 	target     http.ResponseWriter
 	header     http.Header
 	statusCode int
 	buffer     bytes.Buffer
 	stream     bool
 	committed  bool
-	writeErr   error
+	// contentWritten 表示「真正的回應內容」已經**送達客戶端**（不是只寫進緩衝）。
+	// 它和 committed 是兩回事：保活心跳會 commit（header 必須先送出去），
+	// 但心跳不帶任何回應內容，所以送過心跳之後仍然可以換帳號重試 ——
+	// 客戶端只是多收到幾個會被忽略的 ping。
+	contentWritten bool
+	// pendingContent 表示緩衝裡有尚未送出的回應內容。只有在 commit 時才會
+	// 升級成 contentWritten —— 沒送出去的內容不該剝奪重試能力。
+	pendingContent bool
+	writeErr       error
 }
 
 // -------------------------------------------------------------------------------------
@@ -28,12 +39,29 @@ func newDeferredResponseWriter(_target http.ResponseWriter, _stream bool) *defer
 }
 
 // -------------------------------------------------------------------------------------
+// AdoptCommitted 承接前一次嘗試的送出狀態。每次重試都會建立新的 deferred writer，
+// 但它們共用同一個底層 ResponseWriter —— 保活心跳一旦把 header 送出去，
+// 後續的 writer 必須知道，否則會重複送 header。
+func (_w *deferredResponseWriter) AdoptCommitted() {
+	if _w == nil {
+		return
+	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	_w.committed = true
+}
+
+// -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Header() http.Header {
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
 	return _w.header
 }
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) WriteHeader(_statusCode int) {
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
 	if _w.committed {
 		return
 	}
@@ -44,9 +72,14 @@ func (_w *deferredResponseWriter) WriteHeader(_statusCode int) {
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Write(_data []byte) (int, error) {
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	// 這裡寫的一律是真正的回應內容（心跳走 WriteStreamHeartbeat）。
 	if _w.committed {
+		_w.contentWritten = true
 		return _w.target.Write(_data)
 	}
+	_w.pendingContent = true
 	if _w.statusCode == 0 {
 		_w.statusCode = http.StatusOK
 	}
@@ -55,7 +88,7 @@ func (_w *deferredResponseWriter) Write(_data []byte) (int, error) {
 		return _count, _err
 	}
 	if _w.stream && _w.statusCode < http.StatusBadRequest && (streamBufferHasForwardableEvent(_w.buffer.Bytes()) || _w.buffer.Len() >= deferredResponseBufferLimit) {
-		_w.writeErr = _w.Commit()
+		_w.writeErr = _w.commitLocked()
 		if _w.writeErr != nil {
 			return _count, _w.writeErr
 		}
@@ -65,19 +98,24 @@ func (_w *deferredResponseWriter) Write(_data []byte) (int, error) {
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Flush() {
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
 	if !_w.committed {
 		return
 	}
 	flushHTTPResponseWriter(_w.target)
 }
 
-// WriteStreamHeartbeat commits an idle SSE stream so the heartbeat reaches the
-// client. Before this first heartbeat, provider failures remain replaceable.
+// WriteStreamHeartbeat 送出保活心跳。它必須 commit（header 得先送出去客戶端才會
+// 開始讀串流），但心跳不帶任何回應內容，所以 contentWritten 維持 false ——
+// 送過心跳之後仍然可以換帳號重試，客戶端只會多收到幾個會被忽略的 ping。
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) WriteStreamHeartbeat(_data []byte) error {
 	if _w == nil || len(_data) == 0 {
 		return nil
 	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
 	if _w.committed {
 		_, _w.writeErr = _w.target.Write(_data)
 		flushHTTPResponseWriter(_w.target)
@@ -89,12 +127,22 @@ func (_w *deferredResponseWriter) WriteStreamHeartbeat(_data []byte) error {
 	if _, _w.writeErr = _w.buffer.Write(_data); _w.writeErr != nil {
 		return _w.writeErr
 	}
-	_w.writeErr = _w.Commit()
+	_w.writeErr = _w.commitLocked()
 	return _w.writeErr
 }
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Commit() error {
+	if _w == nil {
+		return nil
+	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	return _w.commitLocked()
+}
+
+// -------------------------------------------------------------------------------------
+func (_w *deferredResponseWriter) commitLocked() error {
 	if _w == nil || _w.committed {
 		return _w.writeErr
 	}
@@ -110,6 +158,10 @@ func (_w *deferredResponseWriter) Commit() error {
 	}
 	_w.target.WriteHeader(_statusCode)
 	_w.committed = true
+	if _w.pendingContent {
+		// 內容真的離開緩衝送給客戶端了，這一刻起才沒有退路。
+		_w.contentWritten = true
+	}
 	if _w.buffer.Len() > 0 {
 		_, _w.writeErr = io.Copy(_w.target, &_w.buffer)
 	}
@@ -119,12 +171,20 @@ func (_w *deferredResponseWriter) Commit() error {
 
 // -------------------------------------------------------------------------------------
 // ResetForGracefulTerminal 丟棄尚未送出的緩衝內容，讓呼叫端改用一則正常完成的訊息收尾。
-// 已經送出任何內容後不可使用（回傳 false）。
+// 已經送出真正的回應內容之後不可使用（回傳 false）。
+// 只送過心跳的串流仍然可以收尾：header 雖然出去了，但客戶端還沒收到任何內容，
+// 直接把結尾事件接在心跳後面即可。
 func (_w *deferredResponseWriter) ResetForGracefulTerminal() bool {
-	if _w.committed {
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	if _w.contentWritten {
 		return false
 	}
+	if _w.committed {
+		return true
+	}
 	_w.buffer.Reset()
+	_w.pendingContent = false
 	_w.statusCode = 0
 	_w.header = make(http.Header)
 	_w.writeErr = nil
@@ -133,11 +193,32 @@ func (_w *deferredResponseWriter) ResetForGracefulTerminal() bool {
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) Committed() bool {
-	return _w != nil && _w.committed
+	if _w == nil {
+		return false
+	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	return _w.committed
+}
+
+// -------------------------------------------------------------------------------------
+// ContentWritten 表示真正的回應內容已經送給客戶端 —— 這才是「不能再重試」的判準。
+// 只送過保活心跳的串流仍可換帳號重試。
+func (_w *deferredResponseWriter) ContentWritten() bool {
+	if _w == nil {
+		return false
+	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	return _w.contentWritten
 }
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) StatusCode() int {
+	if _w != nil {
+		_w.lock.Lock()
+		defer _w.lock.Unlock()
+	}
 	if _w == nil || _w.statusCode == 0 {
 		return http.StatusOK
 	}
@@ -149,12 +230,19 @@ func (_w *deferredResponseWriter) BufferedBody() string {
 	if _w == nil {
 		return ""
 	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
 	return _w.buffer.String()
 }
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) HasBufferedResponse() bool {
-	return _w != nil && (_w.buffer.Len() > 0 || _w.statusCode >= http.StatusBadRequest)
+	if _w == nil {
+		return false
+	}
+	_w.lock.Lock()
+	defer _w.lock.Unlock()
+	return _w.buffer.Len() > 0 || _w.statusCode >= http.StatusBadRequest
 }
 
 // -------------------------------------------------------------------------------------

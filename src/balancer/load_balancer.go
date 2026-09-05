@@ -282,7 +282,7 @@ func (_b *LoadBalancer) SelectExcluding(_req *domain.ChatCompletionRequest, _exc
 	defer _b._lock.RUnlock()
 
 	_requestedModel, _modelFallbackReason := _b.effectiveRequestedModel(_req)
-	_candidates := _b.collectCandidates(_req, _profile, _requestedModel, _excluded)
+	_candidates, _fallbackReason := _b.collectCandidates(_req, _profile, _requestedModel, _excluded)
 
 	if len(_candidates) == 0 {
 		_selectionErr := _b.noAvailableProviderError(_req, _profile, _requestedModel, _excluded)
@@ -297,6 +297,17 @@ func (_b *LoadBalancer) SelectExcluding(_req *domain.ChatCompletionRequest, _exc
 	_selected, _meta := _b.selectWithStrategy(_candidates, _profile, _requestedModel)
 	if _modelFallbackReason != "" {
 		_meta.Reason = _modelFallbackReason + "; " + _meta.Reason
+	}
+	// 退讓過的選擇一定要留下痕跡：它代表某條規則被放寬了，
+	// 而使用者看到的現象（請求落在見底的 provider 上）只有從這裡才追得出來。
+	if _fallbackReason != "" {
+		_meta.Reason = _fallbackReason + "; " + _meta.Reason
+		log.Printf(
+			"provider selection fell back: provider=%s model=%s pinned=%t reason=%s",
+			_selected.Provider.Config.ID, _selected.Model.Name,
+			strings.TrimSpace(_req.ProviderID) != "" || strings.TrimSpace(_req.Provider) != "",
+			_fallbackReason,
+		)
 	}
 	return _selected.Provider, _selected.Model, _profile, _meta, nil
 }
@@ -400,7 +411,11 @@ func (_b *LoadBalancer) classifierProviderConfig() (domain.LLMProviderConfig, bo
 }
 
 // -------------------------------------------------------------------------------------
-func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _profile domain.RequestProfile, _requestedModel string, _excludedProviderIDs map[string]bool) []ProviderSelection {
+// collectCandidates 回傳候選清單，以及「動用了哪一層退讓」。
+// 退讓原因必須回報出來：正常情況下永遠是空字串，一旦不是，就代表這次選擇
+// 是在放寬某條規則之後才成立的 —— 沒有這個訊息，事後完全無法分辨
+// 「請求為什麼落在一個不該被選中的 provider 上」。
+func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _profile domain.RequestProfile, _requestedModel string, _excludedProviderIDs map[string]bool) ([]ProviderSelection, string) {
 	_candidates := make([]ProviderSelection, 0)
 	// 已達對話綁定上限的 provider 先放旁邊：只有在完全沒有其他候選時才動用，
 	// 避免上限把請求逼成「沒有可用 provider」。
@@ -408,6 +423,11 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 	// 超過等級上限的候選同樣先放旁邊：降級是政策，不該讓請求變成無 provider 可用。
 	// 沒有任何符合上限的模型時，寧可放行到較高等級，也不要回 503。
 	_overTier := make([]ProviderSelection, 0)
+	// 可用量見底的 provider 是最後手段。硬排除會在多數帳號同時見底時
+	// 把流量全擠到少數幾個上，併發一滿就選不到 provider，使用者看到的是斷線。
+	// 評分本來就會把低可用量的 provider 排到最後（usageScoreAdjustment），
+	// 所以留著當候選不會影響正常情況下的選擇。
+	_exhausted := make([]ProviderSelection, 0)
 	// 明確指定 provider 的請求（對話黏著或金鑰強制路由）不受上限影響，
 	// 否則既有對話會直接失去唯一的候選。
 	_pinned := strings.TrimSpace(_req.ProviderID) != "" || strings.TrimSpace(_req.Provider) != ""
@@ -440,12 +460,13 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 		if _provider.HasAuthError() {
 			continue
 		}
-		if _provider.UsageSnapshot().ExhaustedForSelection() {
-			continue
-		}
+
 		if _provider.Config.MaxConcurrent > 0 && atomic.LoadInt64(&_provider.Active) >= _provider.Config.MaxConcurrent {
 			continue
 		}
+
+		// 可用量見底不再直接跳過，改為降級成最後手段。
+		_exhaustedUsage := _provider.UsageSnapshot().ExhaustedForSelection()
 
 		_models := candidateModels(_provider.Config, _requestedModel)
 		for _modelIdx := range _models {
@@ -465,6 +486,10 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 				_overTier = append(_overTier, _selection)
 				continue
 			}
+			if _exhaustedUsage {
+				_exhausted = append(_exhausted, _selection)
+				continue
+			}
 			if !_pinned && _b.providerAtBindingCap(_provider.Config.ID) {
 				_atCap = append(_atCap, _selection)
 				continue
@@ -473,13 +498,22 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 		}
 	}
 
+	// 退讓順序由「後果嚴重度」決定：綁定上限只是分散策略，放寬沒有代價；
+	// 等級上限放寬只是多花配額，請求仍會成功；可用量見底最可能直接被上游拒絕，
+	// 所以擺在最後。
 	if len(_candidates) == 0 {
 		if len(_atCap) > 0 {
-			return _atCap
+			return _atCap, "fallback: all candidates at binding cap"
 		}
-		return _overTier
+		if len(_overTier) > 0 {
+			return _overTier, "fallback: no model within the quality tier cap"
+		}
+		if len(_exhausted) > 0 {
+			return _exhausted, "fallback: only providers with exhausted quota remain"
+		}
+		return nil, ""
 	}
-	return _candidates
+	return _candidates, ""
 }
 
 // -------------------------------------------------------------------------------------
@@ -839,7 +873,34 @@ func purposeMatchesTask(_purpose string, _taskType string) bool {
 func (_b *LoadBalancer) ProviderStatus() []map[string]interface{} {
 	_b._lock.RLock()
 	defer _b._lock.RUnlock()
+	return _b.providerStatusLocked()
+}
 
+// DashboardSnapshot 在同一版本的設定下讀取狀態，避免複製完整模型 catalog 與金鑰設定。
+func (_b *LoadBalancer) DashboardSnapshot() ([]domain.LLMProviderConfig, []map[string]interface{}) {
+	_b._lock.RLock()
+	defer _b._lock.RUnlock()
+	_configs := make([]domain.LLMProviderConfig, 0, len(_b.Providers))
+	for _, _provider := range _b.Providers {
+		_source := _provider.Config
+		_config := domain.LLMProviderConfig{
+			ID: _source.ID, Name: _source.Name, Kind: _source.Kind,
+			Enabled: _source.Enabled, Priority: _source.Priority,
+			BaseURL: _source.BaseURL, ChatCompletionsPath: _source.ChatCompletionsPath,
+		}
+		if len(_source.Models) > 0 {
+			_config.Models = []domain.LLMModelConfig{{Name: _source.Models[0].Name}}
+		}
+		_configs = append(_configs, _config)
+	}
+	_status := _b.providerStatusLocked()
+	for _, _item := range _status {
+		delete(_item, "models")
+	}
+	return _configs, _status
+}
+
+func (_b *LoadBalancer) providerStatusLocked() []map[string]interface{} {
 	_status := make([]map[string]interface{}, 0, len(_b.Providers))
 	for _, _provider := range _b.Providers {
 		_latencyP50MS, _latencyP95MS, _lastDurationMS, _reactionMS, _lastReactionMS, _tokenSpeed, _lastTokenSpeed, _lastCompletionTokens := _provider.MetricsSnapshot()
@@ -1062,7 +1123,15 @@ func (_p *ProviderRuntime) RecordUsageHeaders(_headers http.Header) {
 // ProviderAvailableForSelection 回報指定 provider 此刻是否還能被選中。
 // 對話黏著若把請求釘在一個當下不可選的 provider（滿載、熔斷、配額暫時不可用…），
 // 選擇階段會找不到候選而直接回 503；此時寧可放棄黏著、降級重新負載平衡。
-// 判斷條件必須與 collectCandidates 一致。
+//
+// 刻意「不」檢查配額見底：5% 是**新對話**的選擇保留量，不代表既有對話不能繼續用。
+// 用門檻趕走既有對話的代價是每輪清掉 previous_response_id 與加密推理內容，
+// 模型得重讀檔案、重新推導 —— 那些重複工作要花 token，配額掉得更快，
+// 更多帳號見底、更多對話被趕走，是個正回饋。
+//
+// 改成證據式：維持黏著直到該 provider 真的拒絕這次請求（capacity 錯誤會觸發
+// releaseContinuity 換帳號），或 QuotaBelowPeerAverage 判定失衡過大。
+// 這裡只保留「確定不能用」的條件：停用、熔斷、容量冷卻中、認證失敗、併發已滿。
 func (_b *LoadBalancer) ProviderAvailableForSelection(_providerID string) bool {
 	_providerID = strings.TrimSpace(_providerID)
 	if _b == nil || _providerID == "" {
@@ -1086,7 +1155,6 @@ func (_b *LoadBalancer) ProviderAvailableForSelection(_providerID string) bool {
 			!_provider.CircuitOpen(_now) &&
 			!_provider.CapacityUnavailable(_now) &&
 			!_provider.HasAuthError() &&
-			!_provider.UsageSnapshot().ExhaustedForSelection() &&
 			(_provider.Config.MaxConcurrent <= 0 || atomic.LoadInt64(&_provider.Active) < _provider.Config.MaxConcurrent)
 	}
 	return false

@@ -61,6 +61,7 @@ const (
 
 // -------------------------------------------------------------------------------------
 type HTTPAPI struct {
+	dashboardCache     dashboardSnapshotCache
 	bindingRefreshLock sync.Mutex
 	bindingRefreshedAt time.Time
 
@@ -107,6 +108,11 @@ type ProviderForm struct {
 // -------------------------------------------------------------------------------------
 type ProviderReorderRequest struct {
 	IDs []string `json:"ids"`
+}
+
+// -------------------------------------------------------------------------------------
+type ProviderRateLimitResetRequest struct {
+	IdempotencyKey string `json:"idempotencyKey"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -274,6 +280,10 @@ func (_h *HTTPAPI) Process(_w http.ResponseWriter, _r *http.Request, _jwt *MarsJ
 	switch {
 	case isMCPRoute(_route):
 		_h.handleMCP(_w, _r, []byte(_body))
+		return responseHandled()
+
+	case _r.Method == http.MethodGet && _route == "/api/dashboard":
+		_h.handleDashboardSnapshot(_w)
 		return responseHandled()
 
 	case _r.Method == http.MethodGet && (_route == "/api/health" || _route == "/v1/health"):
@@ -459,6 +469,14 @@ func (_h *HTTPAPI) Process(_w http.ResponseWriter, _r *http.Request, _jwt *MarsJ
 
 	case _r.Method == http.MethodPost && isProviderActionRoute(_route, "test"):
 		_h.handleProviderTest(_w, providerIDFromActionRoute(_route, "test"))
+		return responseHandled()
+
+	case _r.Method == http.MethodGet && isProviderActionRoute(_route, "rate-limit-reset"):
+		_h.handleGetProviderRateLimitReset(_w, providerIDFromActionRoute(_route, "rate-limit-reset"))
+		return responseHandled()
+
+	case _r.Method == http.MethodPost && isProviderActionRoute(_route, "rate-limit-reset"):
+		_h.handleConsumeProviderRateLimitReset(_w, providerIDFromActionRoute(_route, "rate-limit-reset"), []byte(_body))
 		return responseHandled()
 
 	case _r.Method == http.MethodPost && (_route == "/api/provider/oauth/start" || _route == "/v1/provider/oauth/start"):
@@ -934,8 +952,13 @@ func (_h *HTTPAPI) providerStatusWithHistoryFallback() []map[string]interface{} 
 	_h.applyProviderAccountStatus(_status)
 	_h.applyProviderConversationBindings(_status)
 	_fallbacks := history.RecentProviderMetricFallbacks()
+	applyProviderMetricFallbacks(_status, _fallbacks)
+	return _status
+}
+
+func applyProviderMetricFallbacks(_status []map[string]interface{}, _fallbacks map[string]history.ProviderMetricFallback) {
 	if len(_fallbacks) == 0 {
-		return _status
+		return
 	}
 
 	for _idx := range _status {
@@ -969,7 +992,6 @@ func (_h *HTTPAPI) providerStatusWithHistoryFallback() []map[string]interface{} 
 			_status[_idx]["completion_tokens_total"] = _fallback.TotalCompletionTokens
 		}
 	}
-	return _status
 }
 
 // -------------------------------------------------------------------------------------
@@ -1369,6 +1391,11 @@ func (_h *HTTPAPI) handleResetDashboardMetricBaselines(_w http.ResponseWriter, _
 		_h.writeJSON(_w, http.StatusInternalServerError, domain.ErrorResponse("save_failed", _err.Error()))
 		return
 	}
+	_h.dashboardCache.Lock()
+	_h.dashboardCache.baselineRevision++
+	_h.dashboardCache.baselines = _baselines
+	_h.dashboardCache.baselinesAt = time.Now()
+	_h.dashboardCache.Unlock()
 	_h.writeJSON(_w, http.StatusOK, _baselines)
 }
 
@@ -2153,6 +2180,87 @@ func (_h *HTTPAPI) handleProviderTest(_w http.ResponseWriter, _id string) {
 }
 
 // -------------------------------------------------------------------------------------
+func (_h *HTTPAPI) handleGetProviderRateLimitReset(_w http.ResponseWriter, _id string) {
+	_provider, _ok := _h.findCodexOAuthProviderForReset(_w, _id)
+	if !_ok {
+		return
+	}
+	_client := _h.Client
+	if _client == nil {
+		_client = proxy.NewClient()
+	}
+	_ctx, _cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer _cancel()
+	_credits, _err := _client.GetCodexRateLimitResetCredits(_ctx, &_provider)
+	if _err != nil {
+		_h.writeJSON(_w, http.StatusBadGateway, domain.ErrorResponse("codex_reset_error", _err.Error()))
+		return
+	}
+	_h.clearProviderAuthError(_provider.ID)
+	_h.writeJSON(_w, http.StatusOK, map[string]interface{}{
+		"ok":               true,
+		"availableCount":   _credits.AvailableCount,
+		"expiresAt":        _credits.NextExpiresAt,
+		"hasCreditDetails": _credits.HasCreditDetails,
+	})
+}
+
+// -------------------------------------------------------------------------------------
+func (_h *HTTPAPI) handleConsumeProviderRateLimitReset(_w http.ResponseWriter, _id string, _body []byte) {
+	_provider, _ok := _h.findCodexOAuthProviderForReset(_w, _id)
+	if !_ok {
+		return
+	}
+	var _request ProviderRateLimitResetRequest
+	if _err := json.Unmarshal(_body, &_request); _err != nil {
+		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", "rate-limit reset payload is not valid"))
+		return
+	}
+	_request.IdempotencyKey = strings.TrimSpace(_request.IdempotencyKey)
+	if _request.IdempotencyKey == "" || len(_request.IdempotencyKey) > 200 {
+		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", "idempotencyKey is required and must not exceed 200 characters"))
+		return
+	}
+
+	_client := _h.Client
+	if _client == nil {
+		_client = proxy.NewClient()
+	}
+	_ctx, _cancel := context.WithTimeout(context.Background(), 18*time.Second)
+	defer _cancel()
+	_result, _err := _client.ConsumeCodexRateLimitResetCredit(_ctx, &_provider, _request.IdempotencyKey)
+	if _err != nil {
+		_h.writeJSON(_w, http.StatusBadGateway, domain.ErrorResponse("codex_reset_error", _err.Error()))
+		return
+	}
+	_h.clearProviderAuthError(_provider.ID)
+	_h.writeJSON(_w, http.StatusOK, map[string]interface{}{
+		"ok":           true,
+		"outcome":      _result.Outcome,
+		"windowsReset": _result.WindowsReset,
+	})
+}
+
+// -------------------------------------------------------------------------------------
+func (_h *HTTPAPI) findCodexOAuthProviderForReset(_w http.ResponseWriter, _id string) (domain.LLMProviderConfig, bool) {
+	_provider, _ok := _h.findProviderConfig(strings.TrimSpace(_id))
+	if !_ok {
+		_h.writeJSON(_w, http.StatusNotFound, domain.ErrorResponse("not_found", "provider config not found"))
+		return domain.LLMProviderConfig{}, false
+	}
+	if !strings.EqualFold(inferProviderKind(_provider), "openai-codex") {
+		_h.writeJSON(_w, http.StatusBadRequest, domain.ErrorResponse("invalid_request_error", "rate-limit reset is supported for OpenAI Codex providers only"))
+		return domain.LLMProviderConfig{}, false
+	}
+	_status, _err := codexauth.StatusFor(_provider.ID)
+	if _err != nil || _status.Status != "connected" {
+		_h.writeJSON(_w, http.StatusConflict, domain.ErrorResponse("oauth_required", "OpenAI Codex OAuth is not connected"))
+		return domain.LLMProviderConfig{}, false
+	}
+	return _provider, true
+}
+
+// -------------------------------------------------------------------------------------
 func (_h *HTTPAPI) handleProviderOAuthStart(_w http.ResponseWriter, _body []byte) {
 	var _request ProviderOAuthStartRequest
 	if _err := json.Unmarshal(_body, &_request); _err != nil {
@@ -2861,7 +2969,7 @@ func (_h *HTTPAPI) handleChatCompletions(_w http.ResponseWriter, _r *http.Reques
 	}
 	_requestSignals := telemetry.AnalyzeRequestJSON(_body)
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ChatRefusalTerminal, nil, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ChatRefusalTerminal, proxy.ChatStreamHeartbeat(), nil, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardChatCompletion(_ctx, _attemptWriter, _r, _target, _model, &_chatReq, _body, _profile, _selectionMeta)
 	})
 }
@@ -2913,7 +3021,7 @@ func (_h *HTTPAPI) handleResponsesProxy(_w http.ResponseWriter, _r *http.Request
 	}
 
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ResponsesRefusalTerminal, _releaseContinuity, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ResponsesRefusalTerminal, proxy.ResponsesStreamHeartbeat(), _releaseContinuity, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardResponses(_ctx, _attemptWriter, _r, _target, _model, _body, _profile, _selectionMeta)
 	})
 }
@@ -3131,10 +3239,53 @@ func requestForwardContext(_parent context.Context, _timeout time.Duration, _str
 }
 
 // -------------------------------------------------------------------------------------
+// 保活心跳間隔。上游過載時單次嘗試約 1.5～4 秒，換三個帳號就是十幾秒的靜默；
+// 客戶端等不到第一個 byte 就會斷線重連（Codex 顯示「正在重新連線」），
+// 而重連會把整個 context 重送一次，比等待昂貴得多。
+const providerRetryKeepaliveInterval = 3 * time.Second
+
+// -------------------------------------------------------------------------------------
+// startRetryKeepalive 在還沒有任何回應內容送出的期間，定期送出保活心跳。
+// 心跳不帶回應內容，所以不會剝奪換帳號重試的能力。
+func startRetryKeepalive(_ctx context.Context, _deferred *deferredResponseWriter, _stream bool, _heartbeat []byte) func() {
+	if !_stream || _deferred == nil || len(_heartbeat) == 0 {
+		return func() {}
+	}
+	_stop := make(chan struct{})
+	_done := make(chan struct{})
+	go func() {
+		defer close(_done)
+		_ticker := time.NewTicker(providerRetryKeepaliveInterval)
+		defer _ticker.Stop()
+		for {
+			select {
+			case <-_stop:
+				return
+			case <-_ctx.Done():
+				return
+			case <-_ticker.C:
+				// 內容一旦開始送出就交給上游串流自己的心跳，這裡必須讓開，
+				// 否則會把 ping 插進正在傳輸的回應中間。
+				if _deferred.ContentWritten() {
+					return
+				}
+				if _err := _deferred.WriteStreamHeartbeat(_heartbeat); _err != nil {
+					return
+				}
+			}
+		}
+	}()
+	return func() {
+		close(_stop)
+		<-_done
+	}
+}
+
+// -------------------------------------------------------------------------------------
 type providerForwardAttempt func(context.Context, http.ResponseWriter, *balancer.ProviderRuntime, *domain.LLMModelConfig, domain.RequestProfile, balancer.SelectionMeta) (proxy.ChatMetrics, error)
 
 // -------------------------------------------------------------------------------------
-func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _signals telemetry.RequestSignals, _refusalTerminal func(string) []byte, _releaseContinuity func() bool, _forward providerForwardAttempt) {
+func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Request, _request domain.ChatCompletionRequest, _started time.Time, _signals telemetry.RequestSignals, _refusalTerminal func(string) []byte, _heartbeat []byte, _releaseContinuity func() bool, _forward providerForwardAttempt) {
 	// 釘住 provider 的請求（對話黏著或金鑰強制路由）不能換帳號，否則延續性內容會失效；
 	// 但同一個帳號的暫時性錯誤仍可重試，對使用者是無痕的。
 	_pinnedProvider := strings.TrimSpace(_request.ProviderID) != "" || strings.TrimSpace(_request.Provider) != ""
@@ -3144,8 +3295,27 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 	}
 	_h.applyLowReasoningDemotion(_r, &_request)
 	_h.refreshConversationBindings()
+
+	// 釘住的 provider 已經見底時，在送出「之前」就搬走。
+	// 黏著檢查是在請求剛進來時做的，provider 可能在那之後才跨過門檻；
+	// 而釘住的請求只有它一個候選，會一路打到見底的帳號上 ——
+	// 那多半是串到一半才死，使用者看到的是斷線重連，比失去一輪脈絡糟得多。
+	if _pinnedProvider && !_h.Balancer.ProviderAvailableForSelection(_request.ProviderID) &&
+		_releaseContinuity != nil && _h.conversationPinIsReleasable(_r) && _releaseContinuity() {
+		log.Printf(
+			"conversation pin released before dispatch: provider=%s reason=pinned provider is no longer selectable",
+			_request.ProviderID,
+		)
+		_request.ProviderID = ""
+		_request.Provider = ""
+		_pinnedProvider = false
+		_maxRetries = _h.providerRetryCount()
+	}
+
 	_excluded := []string{}
 	_complexityRecorded := false
+	// 保活心跳送出後 header 就已經出去了，後續嘗試的 writer 必須承接這個狀態。
+	_headersSent := false
 	var _lastErr error
 	var _lastDeferred *deferredResponseWriter
 
@@ -3154,6 +3324,24 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 		if _err != nil {
 			if _lastDeferred != nil && _lastDeferred.HasBufferedResponse() {
 				_ = _lastDeferred.Commit()
+				return
+			}
+			// 串流請求不能回 HTTP 錯誤：客戶端會判定連線失敗並自動重連
+			// （Codex 顯示「正在重新連線 N/5」），使用者看到的是網路問題而不是原因。
+			// 先前只有「重試用盡」那條路做了這件事，選擇階段失敗卻直接回 503／502，
+			// 於是所有 provider 都不可用時每一輪都變成一次重連。
+			_terminalErr := _err
+			if _lastErr != nil {
+				_terminalErr = _lastErr
+			}
+			_terminalWriter := _lastDeferred
+			if _terminalWriter == nil {
+				_terminalWriter = newDeferredResponseWriter(_w, _request.Stream)
+			}
+			if _h.writeGracefulStreamTerminal(_w, _terminalWriter, _request.Stream, _refusalTerminal, _terminalErr) {
+				if _lastErr == nil {
+					_ = history.RecordChat(history.RecordFromSelection(_started, time.Now(), _request, nil, nil, _profile, _selectionMeta, false, _err))
+				}
 				return
 			}
 			if _lastErr != nil {
@@ -3179,8 +3367,18 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 		}
 		_ctx, _cancel := requestForwardContext(_r.Context(), _timeout, _request.Stream)
 		_deferred := newDeferredResponseWriter(_w, _request.Stream)
+		if _headersSent {
+			_deferred.AdoptCommitted()
+		}
+		// 保活必須涵蓋整個嘗試：上游過載時要 1.5～4 秒才回錯誤，
+		// 那段期間內建心跳照不到（還沒有上游串流可監看）。
+		_stopKeepalive := startRetryKeepalive(_r.Context(), _deferred, _request.Stream, _heartbeat)
 		_metrics, _forwardErr := _forward(_ctx, _deferred, _target, _model, _profile, _selectionMeta)
+		_stopKeepalive()
 		_cancel()
+		if _deferred.Committed() {
+			_headersSent = true
+		}
 		_target.FinishRequest()
 		_attemptDuration := time.Since(_attemptStarted)
 
@@ -3207,12 +3405,12 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 		_ = history.RecordChat(history.RecordFromSelection(_attemptStarted, time.Now(), _request, _target, _model, _profile, _selectionMeta, false, _forwardErr))
 		_lastErr = _forwardErr
 		_lastDeferred = _deferred
-		if _deferred.Committed() || _attempt >= _maxRetries || !providerFailureCanRetryBeforeFirstToken(_forwardErr, _deferred) {
-			if !_deferred.Committed() && _deferred.HasBufferedResponse() {
-				_ = _deferred.Commit()
+		if _deferred.ContentWritten() || _attempt >= _maxRetries || !providerFailureCanRetryBeforeFirstToken(_forwardErr, _deferred) {
+			if _deferred.ContentWritten() {
 				return
 			}
-			if _deferred.Committed() {
+			if !_deferred.Committed() && _deferred.HasBufferedResponse() {
+				_ = _deferred.Commit()
 				return
 			}
 			// 重試用盡且確定沒有送出任何內容：用一則「正常完成」的訊息收尾。
@@ -3381,7 +3579,9 @@ func (_h *HTTPAPI) providerRetryCount() int {
 
 // -------------------------------------------------------------------------------------
 func providerFailureCanRetryBeforeFirstToken(_err error, _deferred *deferredResponseWriter) bool {
-	if _err == nil || _deferred == nil || _deferred.Committed() {
+	// 判準是「內容有沒有送達客戶端」而不是「有沒有 commit」：
+	// 保活心跳會 commit，但它不帶回應內容，送過心跳仍然可以換帳號重試。
+	if _err == nil || _deferred == nil || _deferred.ContentWritten() {
 		return false
 	}
 	_statusCode := _deferred.StatusCode()
@@ -3392,6 +3592,10 @@ func providerFailureCanRetryBeforeFirstToken(_err error, _deferred *deferredResp
 		return true
 	}
 	if proxy.IsRetryableCapacityError(_err) {
+		return true
+	}
+	// 上游沒送 terminal 就關掉串流：一個字都還沒送出去，換個 provider 重試無痕。
+	if proxy.IsTruncatedStreamError(_err) {
 		return true
 	}
 	_text := strings.ToLower(strings.TrimSpace(_err.Error() + " " + _deferred.BufferedBody()))

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -166,7 +167,7 @@ func (_c *Client) FetchCodexModelsManifest(_ctx context.Context, _provider *bala
 
 	_clientVersion := ""
 	_ifNoneMatch := ""
-	_userAgent := defaultCodexUpstreamUserAgent
+	_userAgent := ""
 	_originator := defaultCodexUpstreamOriginator
 	if _source != nil {
 		_clientVersion = strings.TrimSpace(_source.URL.Query().Get("client_version"))
@@ -182,7 +183,14 @@ func (_c *Client) FetchCodexModelsManifest(_ctx context.Context, _provider *bala
 		}
 	}
 	if _clientVersion == "" {
+		// 管理介面沒有呼叫端版本，可由部署環境跟進 Codex 的模型可見性版本。
+		_clientVersion = strings.TrimSpace(os.Getenv("MARS_CODEX_MODELS_CLIENT_VERSION"))
+	}
+	if _clientVersion == "" {
 		_clientVersion = defaultCodexClientVersion
+	}
+	if _userAgent == "" {
+		_userAgent = "codex-tui/" + _clientVersion + " (Mac OS; arm64)"
 	}
 
 	_auth, _err := codexauth.Ensure(_provider.Config.ID)

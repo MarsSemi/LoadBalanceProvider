@@ -1524,3 +1524,101 @@ func TestAdvancedSettingsWarnsWhenBindingCapExceedsConcurrency(t *testing.T) {
 		t.Fatalf("no warning expected at or below the tightest concurrency: %q", _payload.Warning)
 	}
 }
+
+// -------------------------------------------------------------------------------------
+// 截斷的串流必須被判定為「可在送出第一個 token 前重試」，否則會直接放棄，
+// 使用者看到的就是 stream closed before response.completed。
+func TestTruncatedStreamIsRetryableBeforeFirstToken(t *testing.T) {
+	_deferred := newDeferredResponseWriter(httptest.NewRecorder(), true)
+	_err := &proxy.ProviderStreamError{
+		Message:         "provider stream closed before sending a terminal event",
+		TruncatedStream: true,
+	}
+	if !providerFailureCanRetryBeforeFirstToken(_err, _deferred) {
+		t.Fatalf("a truncated stream with nothing forwarded must be retryable")
+	}
+
+	// 已經送出內容就不能重試，會重複輸出。
+	_committed := newDeferredResponseWriter(httptest.NewRecorder(), true)
+	if _, _writeErr := _committed.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")); _writeErr != nil {
+		t.Fatal(_writeErr)
+	}
+	if !_committed.Committed() {
+		t.Fatalf("a forwardable event should have committed the writer")
+	}
+	if providerFailureCanRetryBeforeFirstToken(_err, _committed) {
+		t.Fatalf("a committed stream must not be retried")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 串流請求選不到 provider 時不能回 HTTP 錯誤：客戶端會判定連線失敗並自動重連。
+// 所有 provider 都不可用時，那會讓每一輪都變成一次「正在重新連線」。
+func TestStreamSelectionFailureEndsGracefully(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_deferred := newDeferredResponseWriter(_recorder, true)
+	_handler := &HTTPAPI{}
+	_terminal := func(_message string) []byte {
+		return []byte("data: {\"type\":\"response.completed\",\"reason\":\"" + _message + "\"}\n\ndata: [DONE]\n\n")
+	}
+
+	if !_handler.writeGracefulStreamTerminal(_recorder, _deferred, true, _terminal, errors.New("no provider available")) {
+		t.Fatalf("a streaming request should end with a terminal event")
+	}
+	if _recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (an error status triggers a client reconnect)", _recorder.Code)
+	}
+	_body := _recorder.Body.String()
+	if !strings.Contains(_body, "response.completed") || !strings.Contains(_body, "[DONE]") {
+		t.Fatalf("terminal event missing: %q", _body)
+	}
+	if !strings.Contains(_body, "no provider available") {
+		t.Fatalf("failure reason should reach the user: %q", _body)
+	}
+
+	// 非串流請求維持原本的 JSON 錯誤。
+	_plain := httptest.NewRecorder()
+	if _handler.writeGracefulStreamTerminal(_plain, newDeferredResponseWriter(_plain, false), false, _terminal, errors.New("x")) {
+		t.Fatalf("non-streaming requests must keep their JSON error")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 換帳號重試的空檔沒有任何上游串流，內建心跳照不到；
+// 客戶端等不到第一個 byte 就會斷線重連，而重連要把整個 context 重送一次。
+func TestRetryKeepaliveKeepsClientAlive(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_writer := newDeferredResponseWriter(_recorder, true)
+	_ctx, _cancel := context.WithCancel(context.Background())
+	defer _cancel()
+
+	_stop := startRetryKeepalive(_ctx, _writer, true, proxy.ResponsesStreamHeartbeat())
+	_deadline := time.Now().Add(providerRetryKeepaliveInterval * 3)
+	for time.Now().Before(_deadline) && !_writer.Committed() {
+		time.Sleep(50 * time.Millisecond)
+	}
+	_stop()
+
+	if !_writer.Committed() {
+		t.Fatalf("the keepalive should have reached the client within %v", providerRetryKeepaliveInterval*3)
+	}
+	if _writer.ContentWritten() {
+		t.Fatalf("a keepalive must not count as delivered content — retrying has to stay possible")
+	}
+	if !strings.Contains(_recorder.Body.String(), "response.ping") {
+		t.Fatalf("expected a ping event, got %q", _recorder.Body.String())
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 非串流請求不能被塞入 SSE 心跳。
+func TestRetryKeepaliveSkipsNonStreamingRequests(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_writer := newDeferredResponseWriter(_recorder, false)
+	_stop := startRetryKeepalive(context.Background(), _writer, false, proxy.ResponsesStreamHeartbeat())
+	time.Sleep(20 * time.Millisecond)
+	_stop()
+	if _writer.Committed() || _recorder.Body.Len() != 0 {
+		t.Fatalf("a non-streaming response must stay untouched: %q", _recorder.Body.String())
+	}
+}

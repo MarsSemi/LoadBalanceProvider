@@ -4,6 +4,8 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -527,5 +529,150 @@ func TestMaxQualityTierCapsSelection(t *testing.T) {
 	}
 	if _target == nil || _model == nil || _model.QualityTier != 8 {
 		t.Fatalf("expected the over-tier provider as a last resort, got %+v", _model)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 可用量見底的 provider 不能被硬排除：多數帳號同時見底時，流量會全擠到少數
+// 幾個上，併發一滿就選不到 provider，使用者看到的是斷線。
+func TestExhaustedProvidersAreLastResortNotExcluded(t *testing.T) {
+	_drain := func(_balancer *LoadBalancer, _id string) {
+		for _, _provider := range _balancer.Providers {
+			if _provider.Config.ID != _id {
+				continue
+			}
+			_headers := http.Header{}
+			_headers.Set("X-RateLimit-Limit-Requests", "1000")
+			_headers.Set("X-RateLimit-Remaining-Requests", "20")
+			_provider.RecordUsageHeaders(_headers)
+		}
+	}
+	_req := &domain.ChatCompletionRequest{Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+
+	// 還有健康的 provider 時，見底的那個不該被選到。
+	_mixed := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("healthy"), testSessionProvider("drained")},
+	})
+	_drain(_mixed, "drained")
+	for _i := 0; _i < 30; _i++ {
+		_target, _, _, _, _err := _mixed.Select(_req)
+		if _err != nil {
+			t.Fatalf("selection failed: %v", _err)
+		}
+		if _target.Config.ID == "drained" {
+			t.Fatalf("a drained provider must not be preferred while a healthy one exists")
+		}
+	}
+
+	// 全部見底時仍要選得出來，而不是回錯誤讓客戶端斷線重連。
+	_allDrained := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("drained")},
+	})
+	_drain(_allDrained, "drained")
+	if _allDrained.Providers[0].UsageSnapshot().ExhaustedForSelection() != true {
+		t.Fatalf("fixture should be exhausted: %+v", _allDrained.Providers[0].UsageSnapshot())
+	}
+	_target, _, _, _, _err := _allDrained.Select(_req)
+	if _err != nil {
+		t.Fatalf("exhausted providers must still be selectable as a last resort: %v", _err)
+	}
+	if _target == nil || _target.Config.ID != "drained" {
+		t.Fatalf("expected the drained provider, got %+v", _target)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 退讓過的選擇必須留下痕跡，否則「請求為什麼落在見底的 provider 上」事後追不出來。
+func TestFallbackSelectionRecordsItsReason(t *testing.T) {
+	_drain := func(_balancer *LoadBalancer, _id string) {
+		for _, _provider := range _balancer.Providers {
+			if _provider.Config.ID != _id {
+				continue
+			}
+			_headers := http.Header{}
+			_headers.Set("X-RateLimit-Limit-Requests", "1000")
+			_headers.Set("X-RateLimit-Remaining-Requests", "20")
+			_provider.RecordUsageHeaders(_headers)
+		}
+	}
+	_req := &domain.ChatCompletionRequest{Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+
+	// 正常選擇不得帶退讓訊息，否則訊號會被雜訊淹沒。
+	_healthy := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("healthy")},
+	})
+	if _, _, _, _meta, _err := _healthy.Select(_req); _err != nil {
+		t.Fatalf("selection failed: %v", _err)
+	} else if strings.Contains(_meta.Reason, "fallback") {
+		t.Fatalf("a normal selection must not be marked as a fallback: %q", _meta.Reason)
+	}
+
+	// 只剩見底的 provider：選得出來，而且要說明原因。
+	_drained := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("drained")},
+	})
+	_drain(_drained, "drained")
+	_, _, _, _meta, _err := _drained.Select(_req)
+	if _err != nil {
+		t.Fatalf("exhausted providers must remain selectable: %v", _err)
+	}
+	if !strings.Contains(_meta.Reason, "exhausted quota") {
+		t.Fatalf("fallback reason missing from selection meta: %q", _meta.Reason)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 配額見底不該把既有對話趕走：5% 是新對話的選擇保留量，不是「不能用」。
+// 用門檻趕走對話的代價是每輪重建脈絡，那些重複工作反而讓配額掉得更快。
+func TestExhaustedProviderStaysPinnable(t *testing.T) {
+	_balancer := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("healthy"), testSessionProvider("drained")},
+	})
+	_drained := _balancer.Providers[1]
+	_headers := http.Header{}
+	_headers.Set("X-RateLimit-Limit-Requests", "1000")
+	_headers.Set("X-RateLimit-Remaining-Requests", "20")
+	_drained.RecordUsageHeaders(_headers)
+
+	if !_drained.UsageSnapshot().ExhaustedForSelection() {
+		t.Fatalf("fixture should be exhausted: %+v", _drained.UsageSnapshot())
+	}
+	if !_balancer.ProviderAvailableForSelection("drained") {
+		t.Fatalf("low quota alone must not evict an existing conversation")
+	}
+
+	// 但「確定不能用」的狀態仍要放棄黏著 —— 那是證據而不是門檻。
+	atomic.StoreInt64(&_drained.CircuitOpenUntil, time.Now().Add(time.Minute).UnixNano())
+	if _balancer.ProviderAvailableForSelection("drained") {
+		t.Fatalf("an open circuit must still drop the pin")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 見底的 provider 仍然只在沒有其他候選時才會被選中（新對話的保留量照舊生效）。
+func TestExhaustedProviderStillLastForNewConversations(t *testing.T) {
+	_balancer := NewLoadBalancer(&domain.ProxyConfig{
+		SelectionStrategy: "weighted_score",
+		Providers:         []domain.LLMProviderConfig{testSessionProvider("healthy"), testSessionProvider("drained")},
+	})
+	_headers := http.Header{}
+	_headers.Set("X-RateLimit-Limit-Requests", "1000")
+	_headers.Set("X-RateLimit-Remaining-Requests", "20")
+	_balancer.Providers[1].RecordUsageHeaders(_headers)
+
+	_req := &domain.ChatCompletionRequest{Messages: []domain.ChatMessage{{Role: "user", Content: "hi"}}}
+	for _i := 0; _i < 30; _i++ {
+		_target, _, _, _, _err := _balancer.Select(_req)
+		if _err != nil {
+			t.Fatalf("selection failed: %v", _err)
+		}
+		if _target.Config.ID == "drained" {
+			t.Fatalf("new conversations must still avoid a drained provider")
+		}
 	}
 }

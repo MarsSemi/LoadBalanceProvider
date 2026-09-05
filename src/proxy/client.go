@@ -46,7 +46,11 @@ const (
 	minimumReliableStreamMetricWindowMS = 100.0
 	// 串流速率的最小可信樣本：chunk 數與時間窗都不足時不更新統計，
 	// 避免短回應把儀表板數字拉得忽高忽低。
-	minimumDeliverySampleChunks       = 8
+	minimumDeliverySampleChunks = 8
+	// 生成窗至少要由這麼多個「帶內容的上游事件」構成。事件數太少代表整段輸出
+	// 是一次沖出來的，量到的是 socket flush 而不是生成速率 —— 這種情況下窗再長
+	// 也不可信，所以事件數的門檻比毫秒下限更能擋住荒謬數字。
+	minimumGenerationSampleEvents     = 8
 	minimumDeliveryWindowMS           = 200.0
 	downstreamStreamHeartbeatInterval = 15 * time.Second
 )
@@ -68,6 +72,10 @@ type ProviderStreamError struct {
 	RetryableCapacity bool
 	ResponseForwarded bool
 	UpstreamRejected  bool
+	// TruncatedStream 表示上游沒送 terminal 事件就把串流關掉。
+	// 這種故障用錯誤訊息比對認不出來（訊息是我們自己產的、狀態碼是 200），
+	// 所以用旗標明確標示，讓「還沒送出內容就可以重試」的判斷認得它。
+	TruncatedStream bool
 }
 
 // -------------------------------------------------------------------------------------
@@ -107,8 +115,10 @@ type ChatMetrics struct {
 	ReasoningReported bool
 	TotalResponseMS   float64
 	ContentSeen       bool
-	ProviderTiming    bool
-	TerminalSeen      bool
+	// ProviderContentEvents 是帶內容的上游事件數，用來判斷生成窗可不可信。
+	ProviderContentEvents int
+	ProviderTiming        bool
+	TerminalSeen          bool
 }
 
 // -------------------------------------------------------------------------------------
@@ -172,6 +182,20 @@ func (_e *ProviderStreamError) Error() string {
 		return "provider stream failed"
 	}
 	return _e.Message
+}
+
+// -------------------------------------------------------------------------------------
+// IsTruncatedStreamError 表示上游沒送 terminal 事件就關掉串流。
+// 一個字都還沒送出去的話，這種故障換一個 provider 重試對使用者是無痕的。
+func IsTruncatedStreamError(_err error) bool {
+	if _err == nil {
+		return false
+	}
+	var _streamErr *ProviderStreamError
+	if errors.As(_err, &_streamErr) {
+		return _streamErr.TruncatedStream
+	}
+	return false
 }
 
 // -------------------------------------------------------------------------------------
@@ -1378,8 +1402,13 @@ func streamCopyWithProviderIdleTimeout(_w http.ResponseWriter, _reader io.ReadCl
 	case !_metrics.TerminalSeen:
 		// Upstream closed cleanly (EOF) but never sent a terminal event
 		// (response.completed / [DONE] / finish_reason). This is exactly what makes a
-		// Responses client report "stream closed before response.completed". Err is nil
-		// here, so without this line the close would be invisible in the log.
+		// Responses client report "stream closed before response.completed".
+		//
+		// 先前這裡只記 log 就把 _err 留成 nil，等於把截斷的串流回報成「成功」：
+		//   - 呼叫端不會換 provider 重試，即使一個字都還沒送出去
+		//   - provider 健康度被記成成功，一直掉串流的來源看起來完全正常
+		// 因此改為回報錯誤。ResponseForwarded 決定還能不能重試：內容已經送出去的
+		// 那一刻起就沒有退路，只能讓客戶端自己重試。
 		log.Printf(
 			"provider stream closed WITHOUT terminal event: provider=%s elapsed=%s content_items=%d last_event=%s (client will see 'stream closed before response.completed')",
 			_providerName,
@@ -1387,6 +1416,11 @@ func streamCopyWithProviderIdleTimeout(_w http.ResponseWriter, _reader io.ReadCl
 			_metrics.ClientContentItems,
 			_idleReader.LastEventType(),
 		)
+		_err = &ProviderStreamError{
+			Message:           "provider stream closed before sending a terminal event",
+			ResponseForwarded: _metrics.ClientContentItems > 0,
+			TruncatedStream:   true,
+		}
 	}
 	return _metrics, _err
 }
@@ -1705,6 +1739,14 @@ func writeDownstreamStreamHeartbeat(_w http.ResponseWriter, _heartbeat []byte) e
 // 用「空 delta 的正規 chunk」而非 SSE 註解（": keep-alive"）：OpenAI 風格客戶端
 // （例如 Codex CLI）的 eventsource 解析器會丟棄註解、不重置其 idle 計時器，只有真正的
 // data: 事件才會重置。空 delta 對客戶端而言是 no-op，不會顯示任何內容。
+// ChatStreamHeartbeat / ResponsesStreamHeartbeat 供 API 層在「換帳號重試的空檔」
+// 保持客戶端連線存活。那段期間沒有任何上游串流，內建的心跳照不到。
+func ChatStreamHeartbeat() []byte { return chatStreamHeartbeat() }
+
+// -------------------------------------------------------------------------------------
+func ResponsesStreamHeartbeat() []byte { return responsesStreamHeartbeat() }
+
+// -------------------------------------------------------------------------------------
 func chatStreamHeartbeat() []byte {
 	return []byte("data: {\"id\":\"chatcmpl-keepalive\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"keepalive\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":null}]}\n\n")
 }
@@ -2723,6 +2765,7 @@ func (_m *ChatMetrics) merge(_other ChatMetrics) {
 	if _other.ContentSeen {
 		_m.ContentSeen = true
 	}
+	_m.ProviderContentEvents += _other.ProviderContentEvents
 	if _other.StreamedHanChars > 0 || _other.StreamedOtherChars > 0 {
 		_m.StreamedHanChars += _other.StreamedHanChars
 		_m.StreamedOtherChars += _other.StreamedOtherChars
@@ -2914,6 +2957,12 @@ func (_m ChatMetrics) TokenGenerationSpeed(_fallback time.Duration) float64 {
 	if _generationMS <= 0 || (_generationMS < minimumReliableStreamMetricWindowMS && _fallbackMS > _generationMS) {
 		_generationMS = _fallbackMS
 	}
+	// 串流回應若只由少數幾個事件構成，代表上游想了很久、最後一次把整段沖出來。
+	// 這時窗量到的是沖出的瞬間，不是生成速率 —— 毫秒下限擋不住（500ms 也會過），
+	// 必須改看事件數。非串流回應沒有事件計數，維持原本行為。
+	if _m.ProviderContentEvents > 0 && _m.ProviderContentEvents < minimumGenerationSampleEvents && _fallbackMS > _generationMS {
+		_generationMS = _fallbackMS
+	}
 	if _generationMS > 0 {
 		return float64(_m.CompletionTokens) / (_generationMS / 1000)
 	}
@@ -3054,6 +3103,7 @@ func streamDataMetrics(_line string) ChatMetrics {
 	}
 	_hanChars, _otherChars := tokenCharCounts(_text)
 	_metrics.ContentSeen = true
+	_metrics.ProviderContentEvents = 1
 	_metrics.StreamedHanChars = _hanChars
 	_metrics.StreamedOtherChars = _otherChars
 	if _metrics.CompletionTokens <= 0 {

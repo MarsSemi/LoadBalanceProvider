@@ -88,3 +88,82 @@ func TestDeferredResponseWriterHeartbeatCommitsAndFlushes(t *testing.T) {
 		t.Fatal("heartbeat must flush the downstream response")
 	}
 }
+
+// -------------------------------------------------------------------------------------
+// 保活心跳會 commit（header 必須先送出去），但它不帶回應內容 ——
+// 送過心跳之後仍然要能換帳號重試，否則「保持連線」與「還能重試」變成互斥。
+func TestHeartbeatDoesNotForfeitRetry(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_writer := newDeferredResponseWriter(_recorder, true)
+
+	if _err := _writer.WriteStreamHeartbeat([]byte("event: response.ping\ndata: {}\n\n")); _err != nil {
+		t.Fatal(_err)
+	}
+	if !_writer.Committed() {
+		t.Fatalf("a heartbeat must commit so the client starts reading")
+	}
+	if _writer.ContentWritten() {
+		t.Fatalf("a heartbeat carries no response content; retrying must stay possible")
+	}
+	if !_writer.ResetForGracefulTerminal() {
+		t.Fatalf("a heartbeat-only stream must still be closeable with a terminal event")
+	}
+
+	// 真正的內容送出後就沒有退路了。
+	if _, _err := _writer.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n")); _err != nil {
+		t.Fatal(_err)
+	}
+	if !_writer.ContentWritten() {
+		t.Fatalf("real content must mark the response as delivered")
+	}
+	if _writer.ResetForGracefulTerminal() {
+		t.Fatalf("delivered content cannot be reset")
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 緩衝中但尚未送出的內容不算「已送達」—— 它仍然可以被丟棄改用優雅結尾。
+func TestBufferedContentIsNotDelivered(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_writer := newDeferredResponseWriter(_recorder, true)
+
+	_writer.WriteHeader(http.StatusInternalServerError)
+	if _, _err := _writer.Write([]byte(`{"error":"boom"}`)); _err != nil {
+		t.Fatal(_err)
+	}
+	if _writer.Committed() || _writer.ContentWritten() {
+		t.Fatalf("an error body must stay buffered: committed=%v content=%v", _writer.Committed(), _writer.ContentWritten())
+	}
+	if !_writer.ResetForGracefulTerminal() {
+		t.Fatalf("buffered content must be discardable")
+	}
+	if _recorder.Body.Len() != 0 {
+		t.Fatalf("nothing should have reached the client yet: %q", _recorder.Body.String())
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 重試會建立新的 writer，但共用同一個底層 ResponseWriter；
+// 心跳送過 header 之後，後續 writer 不能再送一次。
+func TestAdoptCommittedPreventsDuplicateHeader(t *testing.T) {
+	_recorder := httptest.NewRecorder()
+	_first := newDeferredResponseWriter(_recorder, true)
+	if _err := _first.WriteStreamHeartbeat([]byte("event: response.ping\ndata: {}\n\n")); _err != nil {
+		t.Fatal(_err)
+	}
+
+	_second := newDeferredResponseWriter(_recorder, true)
+	_second.AdoptCommitted()
+	if !_second.Committed() {
+		t.Fatalf("the retry writer must inherit the committed state")
+	}
+	if _second.ContentWritten() {
+		t.Fatalf("inheriting headers must not imply content was delivered")
+	}
+	if _, _err := _second.Write([]byte("data: hello\n\n")); _err != nil {
+		t.Fatal(_err)
+	}
+	if !strings.Contains(_recorder.Body.String(), "response.ping") || !strings.Contains(_recorder.Body.String(), "hello") {
+		t.Fatalf("both the heartbeat and the real content should reach the client: %q", _recorder.Body.String())
+	}
+}

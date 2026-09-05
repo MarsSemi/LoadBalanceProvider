@@ -1485,3 +1485,93 @@ func TestReportedReasoningMergesByMaxNotSum(t *testing.T) {
 		t.Fatalf("reasoning tokens should not accumulate across events: %d", _total.ReportedReasoningTokens)
 	}
 }
+
+// -------------------------------------------------------------------------------------
+// 上游想很久、最後把整段一次沖出來時，生成窗量到的是 socket flush 而不是生成速率。
+// 毫秒下限擋不住這種情況（500ms 的窗會通過），必須改看事件數。
+func TestGenerationSpeedIgnoresBurstFlushWindow(t *testing.T) {
+	_burst := ChatMetrics{
+		CompletionTokens:      280,
+		FirstResponseMS:       12000,
+		TotalResponseMS:       12500,
+		ProviderContentEvents: 2,
+	}
+	_speed := _burst.TokenGenerationSpeed(12500 * time.Millisecond)
+	if _speed > 30 {
+		t.Fatalf("burst flush must not report a generation rate: %.1f tok/s", _speed)
+	}
+
+	// 逐字串流的窗是可信的，不能被這個守衛壓掉。
+	_steady := ChatMetrics{
+		CompletionTokens:      280,
+		FirstResponseMS:       800,
+		TotalResponseMS:       12500,
+		ProviderContentEvents: 140,
+	}
+	if _speed := _steady.TokenGenerationSpeed(12500 * time.Millisecond); _speed < 20 || _speed > 30 {
+		t.Fatalf("steady streaming should keep its own window: %.1f tok/s", _speed)
+	}
+
+	// 非串流回應沒有事件計數，維持原本行為。
+	_nonStreaming := ChatMetrics{CompletionTokens: 280, FirstResponseMS: 800, TotalResponseMS: 12500}
+	if _speed := _nonStreaming.TokenGenerationSpeed(12500 * time.Millisecond); _speed <= 0 {
+		t.Fatalf("non-streaming responses must still report a speed: %.1f", _speed)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 工具呼叫參數是輸出的一部分，帶內容的事件要計數 ——
+// 首字時間與生成窗都依賴它。
+func TestToolCallDeltaCountsAsContentEvent(t *testing.T) {
+	_metrics := streamDataMetrics(`data: {"choices":[{"delta":{"tool_calls":[{"id":"c1","function":{"arguments":"{\"path\":\"/tmp\"}"}}]}}]}`)
+	if !_metrics.ContentSeen {
+		t.Fatalf("tool call arguments are output and must count as content")
+	}
+	if _metrics.ProviderContentEvents != 1 {
+		t.Fatalf("content event should be counted once, got %d", _metrics.ProviderContentEvents)
+	}
+
+	_empty := streamDataMetrics(`data: {"choices":[{"delta":{}}]}`)
+	if _empty.ProviderContentEvents != 0 {
+		t.Fatalf("empty delta must not count: %d", _empty.ProviderContentEvents)
+	}
+}
+
+// -------------------------------------------------------------------------------------
+// 上游沒送 terminal 就關掉串流時，先前 _err 是 nil，等於把截斷的串流回報成成功：
+// 呼叫端不會換 provider 重試，provider 健康度也被記成成功。
+func TestTerminallessStreamIsReportedAsFailure(t *testing.T) {
+	_copy := func(_body string) (ChatMetrics, error) {
+		return streamCopyWithProviderIdleTimeout(
+			httptest.NewRecorder(), io.NopCloser(strings.NewReader(_body)),
+			time.Now(), false, nil, nil, nil, nil, nil,
+		)
+	}
+
+	// 一個字都沒送出去：可重試，換 provider 對使用者無痕。
+	_, _empty := _copy("")
+	if _empty == nil {
+		t.Fatalf("an empty stream must not be reported as success")
+	}
+	if !IsTruncatedStreamError(_empty) {
+		t.Fatalf("should be flagged as truncated: %v", _empty)
+	}
+	if ResponseAlreadyForwarded(_empty) {
+		t.Fatalf("nothing was forwarded, so a retry must still be possible")
+	}
+
+	// 已經送出內容：仍是失敗（要計入 provider 健康度），但不能再重試。
+	_, _partial := _copy("data: {\"choices\":[{\"delta\":{\"content\":\"半句話\"}}]}\n\n")
+	if _partial == nil {
+		t.Fatalf("a truncated stream must not be reported as success")
+	}
+	if !ResponseAlreadyForwarded(_partial) {
+		t.Fatalf("content already reached the client; retrying would duplicate it")
+	}
+
+	// 正常結束不受影響。
+	_, _complete := _copy("data: {\"choices\":[{\"delta\":{\"content\":\"完整\"}}]}\n\ndata: [DONE]\n\n")
+	if _complete != nil {
+		t.Fatalf("a properly terminated stream must stay successful: %v", _complete)
+	}
+}

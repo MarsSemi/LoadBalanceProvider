@@ -125,6 +125,8 @@ type ChatCompletionRequest struct {
 	MaxTokens             *int                   `json:"max_tokens,omitempty"`
 	MaxTokensV2           *int                   `json:"max_completion_tokens,omitempty"`
 	Tools                 []interface{}          `json:"tools,omitempty"`
+	ToolChoice            interface{}            `json:"tool_choice,omitempty"`
+	ParallelToolCalls     *bool                  `json:"parallel_tool_calls,omitempty"`
 	ResponseFormat        map[string]interface{} `json:"response_format,omitempty"`
 	Reasoning             map[string]interface{} `json:"reasoning,omitempty"`
 	ReasoningEffort       string                 `json:"reasoning_effort,omitempty"`
@@ -135,8 +137,23 @@ type ChatCompletionRequest struct {
 
 // -------------------------------------------------------------------------------------
 type ChatMessage struct {
-	Role    string      `json:"role"`
-	Content interface{} `json:"content"`
+	Role       string         `json:"role"`
+	Content    interface{}    `json:"content"`
+	ToolCalls  []ChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+}
+
+// -------------------------------------------------------------------------------------
+type ChatToolCall struct {
+	ID       string           `json:"id,omitempty"`
+	Type     string           `json:"type,omitempty"`
+	Function ChatFunctionCall `json:"function"`
+}
+
+// -------------------------------------------------------------------------------------
+type ChatFunctionCall struct {
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
 }
 
 // -------------------------------------------------------------------------------------

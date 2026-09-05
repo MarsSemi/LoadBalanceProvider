@@ -19,7 +19,7 @@ import (
 // -------------------------------------------------------------------------------------
 const defaultOpenAICodexAPIResponsesURL = "https://api.openai.com/v1/responses"
 const defaultOpenAICodexOAuthResponsesURL = "https://chatgpt.com/backend-api/codex/responses"
-const defaultCodexClientVersion = "0.146.0"
+const defaultCodexClientVersion = "0.153.0"
 const defaultCodexUpstreamUserAgent = "codex-tui/" + defaultCodexClientVersion + " (Mac OS; arm64)"
 const defaultCodexUpstreamOriginator = "codex-tui"
 
@@ -28,6 +28,9 @@ type codexResponsesRequest struct {
 	Model        string                  `json:"model"`
 	Instructions string                  `json:"instructions,omitempty"`
 	Input        []codexResponsesMessage `json:"input"`
+	Tools        []interface{}           `json:"tools,omitempty"`
+	ToolChoice   interface{}             `json:"tool_choice,omitempty"`
+	Parallel     *bool                   `json:"parallel_tool_calls,omitempty"`
 	Reasoning    *codexReasoningConfig   `json:"reasoning,omitempty"`
 	Include      []string                `json:"include,omitempty"`
 	PromptCache  string                  `json:"prompt_cache_key,omitempty"`
@@ -44,8 +47,12 @@ type codexReasoningConfig struct {
 // -------------------------------------------------------------------------------------
 type codexResponsesMessage struct {
 	Type    string                      `json:"type"`
-	Role    string                      `json:"role"`
-	Content []codexResponsesContentPart `json:"content"`
+	Role    string                      `json:"role,omitempty"`
+	Content []codexResponsesContentPart `json:"content,omitempty"`
+	CallID  string                      `json:"call_id,omitempty"`
+	Name    string                      `json:"name,omitempty"`
+	Args    string                      `json:"arguments,omitempty"`
+	Output  string                      `json:"output,omitempty"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -58,17 +65,24 @@ type codexResponsesContentPart struct {
 
 // -------------------------------------------------------------------------------------
 type codexCompleted struct {
-	ID     string `json:"id"`
-	Model  string `json:"model"`
-	Output []struct {
-		Type    string `json:"type"`
-		Role    string `json:"role"`
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	} `json:"output"`
-	Usage codexUsage `json:"usage"`
+	ID     string            `json:"id"`
+	Model  string            `json:"model"`
+	Output []codexOutputItem `json:"output"`
+	Usage  codexUsage        `json:"usage"`
+}
+
+// -------------------------------------------------------------------------------------
+type codexOutputItem struct {
+	ID        string `json:"id,omitempty"`
+	Type      string `json:"type"`
+	Role      string `json:"role,omitempty"`
+	CallID    string `json:"call_id,omitempty"`
+	Name      string `json:"name,omitempty"`
+	Arguments string `json:"arguments,omitempty"`
+	Content   []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content,omitempty"`
 }
 
 // -------------------------------------------------------------------------------------
@@ -311,9 +325,6 @@ func buildCodexResponsesRequest(_chatReq *domain.ChatCompletionRequest, _model s
 	for _, msg := range _chatReq.Messages {
 		role := strings.ToLower(strings.TrimSpace(msg.Role))
 		parts := codexContentPartsForRole(role, msg.Content)
-		if len(parts) == 0 {
-			continue
-		}
 		if codexPartsHaveImage(parts) {
 			hasImage = true
 		}
@@ -323,9 +334,40 @@ func buildCodexResponsesRequest(_chatReq *domain.ChatCompletionRequest, _model s
 				instructions = append(instructions, content)
 			}
 		case "assistant":
-			messages = append(messages, codexResponsesMessage{Type: "message", Role: "assistant", Content: parts})
+			if len(parts) > 0 {
+				messages = append(messages, codexResponsesMessage{Type: "message", Role: "assistant", Content: parts})
+			}
+			for index, call := range msg.ToolCalls {
+				name := strings.TrimSpace(call.Function.Name)
+				if name == "" {
+					continue
+				}
+				callID := strings.TrimSpace(call.ID)
+				if callID == "" {
+					callID = fmt.Sprintf("call_history_%d", index)
+				}
+				messages = append(messages, codexResponsesMessage{
+					Type:   "function_call",
+					CallID: callID,
+					Name:   name,
+					Args:   strings.TrimSpace(call.Function.Arguments),
+				})
+			}
+		case "tool":
+			callID := strings.TrimSpace(msg.ToolCallID)
+			if callID != "" {
+				messages = append(messages, codexResponsesMessage{
+					Type:   "function_call_output",
+					CallID: callID,
+					Output: messageContentText(msg.Content),
+				})
+			} else if len(parts) > 0 {
+				messages = append(messages, codexResponsesMessage{Type: "message", Role: "user", Content: parts})
+			}
 		default:
-			messages = append(messages, codexResponsesMessage{Type: "message", Role: "user", Content: parts})
+			if len(parts) > 0 {
+				messages = append(messages, codexResponsesMessage{Type: "message", Role: "user", Content: parts})
+			}
 		}
 	}
 	attachmentParts := codexImageContentPartsFromAttachments(_chatReq.Attachments)
@@ -347,12 +389,59 @@ func buildCodexResponsesRequest(_chatReq *domain.ChatCompletionRequest, _model s
 		Model:        codexUpstreamModelName(_model),
 		Instructions: instructionText,
 		Input:        messages,
+		Tools:        codexToolDefinitions(_chatReq.Tools),
+		ToolChoice:   codexToolChoice(_chatReq.ToolChoice),
+		Parallel:     _chatReq.ParallelToolCalls,
 		Reasoning:    codexReasoningConfigForChatRequest(_chatReq, _provider),
 		Include:      []string{"reasoning.encrypted_content"},
 		PromptCache:  strings.TrimSpace(_chatReq.PromptCacheKey),
 		Stream:       _chatReq.Stream,
 		Store:        false,
 	}
+}
+
+// -------------------------------------------------------------------------------------
+// codexToolDefinitions 將 Chat Completions 的巢狀 function 格式攤平成 Responses 格式。
+// 非 function 工具保持原狀，避免代理層擅自破壞後續新增的工具型別。
+func codexToolDefinitions(_tools []interface{}) []interface{} {
+	result := make([]interface{}, 0, len(_tools))
+	for _, raw := range _tools {
+		tool, ok := raw.(map[string]interface{})
+		if !ok || !strings.EqualFold(strings.TrimSpace(stringFromAny(tool["type"])), "function") {
+			result = append(result, raw)
+			continue
+		}
+		function, nested := tool["function"].(map[string]interface{})
+		if !nested {
+			result = append(result, raw)
+			continue
+		}
+		converted := map[string]interface{}{
+			"type":       "function",
+			"name":       stringFromAny(function["name"]),
+			"parameters": function["parameters"],
+		}
+		if description := strings.TrimSpace(stringFromAny(function["description"])); description != "" {
+			converted["description"] = description
+		}
+		if strict, exists := function["strict"]; exists {
+			converted["strict"] = strict
+		}
+		result = append(result, converted)
+	}
+	return result
+}
+
+// -------------------------------------------------------------------------------------
+func codexToolChoice(_choice interface{}) interface{} {
+	choice, ok := _choice.(map[string]interface{})
+	if !ok || !strings.EqualFold(strings.TrimSpace(stringFromAny(choice["type"])), "function") {
+		return _choice
+	}
+	if function, nested := choice["function"].(map[string]interface{}); nested {
+		return map[string]interface{}{"type": "function", "name": stringFromAny(function["name"])}
+	}
+	return _choice
 }
 
 // -------------------------------------------------------------------------------------
@@ -687,6 +776,19 @@ func normalizeResponsesRoutePath(_path string) string {
 func codexCompletedAsChat(_completed codexCompleted, _fallbackModel string) map[string]interface{} {
 	model := firstNonEmpty(_completed.Model, _fallbackModel)
 	content := codexCompletedText(_completed)
+	toolCalls := codexCompletedToolCalls(_completed)
+	finishReason := "stop"
+	message := map[string]interface{}{
+		"role":    "assistant",
+		"content": content,
+	}
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+		message["tool_calls"] = toolCalls
+		if content == "" {
+			message["content"] = nil
+		}
+	}
 	return map[string]interface{}{
 		"id":      firstNonEmpty(_completed.ID, fmt.Sprintf("codex-%d", time.Now().UnixNano())),
 		"object":  "chat.completion",
@@ -695,15 +797,36 @@ func codexCompletedAsChat(_completed codexCompleted, _fallbackModel string) map[
 		"choices": []map[string]interface{}{
 			{
 				"index":         0,
-				"finish_reason": "stop",
-				"message": map[string]interface{}{
-					"role":    "assistant",
-					"content": content,
-				},
+				"finish_reason": finishReason,
+				"message":       message,
 			},
 		},
 		"usage": codexUsageAsChat(_completed.Usage),
 	}
+}
+
+// -------------------------------------------------------------------------------------
+func codexCompletedToolCalls(_completed codexCompleted) []map[string]interface{} {
+	result := []map[string]interface{}{}
+	for _, output := range _completed.Output {
+		if !strings.EqualFold(strings.TrimSpace(output.Type), "function_call") || strings.TrimSpace(output.Name) == "" {
+			continue
+		}
+		callID := firstNonEmpty(output.CallID, output.ID)
+		if callID == "" {
+			callID = fmt.Sprintf("call_codex_%d", len(result))
+		}
+		result = append(result, map[string]interface{}{
+			"index": len(result),
+			"id":    callID,
+			"type":  "function",
+			"function": map[string]interface{}{
+				"name":      strings.TrimSpace(output.Name),
+				"arguments": output.Arguments,
+			},
+		})
+	}
+	return result
 }
 
 // -------------------------------------------------------------------------------------
@@ -735,8 +858,21 @@ func codexUsageAsChat(_usage codexUsage) map[string]interface{} {
 }
 
 // -------------------------------------------------------------------------------------
+type codexChatStreamState struct {
+	indexes      map[string]int
+	emittedCalls map[string]bool
+	arguments    map[string]string
+	hasToolCalls bool
+}
+
+// -------------------------------------------------------------------------------------
 func streamCodexResponsesAsChat(_w http.ResponseWriter, _body io.Reader, _model string, _started time.Time) (ChatMetrics, error) {
 	metrics := ChatMetrics{}
+	state := &codexChatStreamState{
+		indexes:      map[string]int{},
+		emittedCalls: map[string]bool{},
+		arguments:    map[string]string{},
+	}
 
 	_buffer := make([]byte, 32*1024)
 	_pending := ""
@@ -745,7 +881,7 @@ func streamCodexResponsesAsChat(_w http.ResponseWriter, _body io.Reader, _model 
 		if _payload == "" || _payload == "[DONE]" {
 			return true, nil
 		}
-		return writeCodexEventAsChat(_w, _name, _payload, _model, _started, &metrics)
+		return writeCodexEventAsChat(_w, _name, _payload, _model, _started, &metrics, state)
 	}
 
 	for {
@@ -827,7 +963,7 @@ func codexSSEEventNameAndPayload(_event string) (string, string) {
 }
 
 // -------------------------------------------------------------------------------------
-func writeCodexEventAsChat(_w http.ResponseWriter, _eventName string, _payload string, _model string, _started time.Time, _metrics *ChatMetrics) (bool, error) {
+func writeCodexEventAsChat(_w http.ResponseWriter, _eventName string, _payload string, _model string, _started time.Time, _metrics *ChatMetrics, _state *codexChatStreamState) (bool, error) {
 	var item map[string]interface{}
 	if err := json.Unmarshal([]byte(_payload), &item); err != nil {
 		return false, err
@@ -838,17 +974,53 @@ func writeCodexEventAsChat(_w http.ResponseWriter, _eventName string, _payload s
 		return false, writeCodexDelta(_w, _model, "content", stringFromAny(item["delta"]), _started, _metrics)
 	case "response.reasoning_text.delta", "response.reasoning_summary_text.delta":
 		return false, writeCodexDelta(_w, _model, "reasoning_content", stringFromAny(item["delta"]), _started, _metrics)
+	case "response.output_item.added", "response.output_item.done":
+		output, _ := item["item"].(map[string]interface{})
+		if !strings.EqualFold(strings.TrimSpace(stringFromAny(output["type"])), "function_call") {
+			return false, nil
+		}
+		return false, writeCodexFunctionItemAsChat(_w, _model, item, output, _started, _metrics, _state)
+	case "response.function_call_arguments.delta":
+		key := codexStreamCallKey(item, nil)
+		index := codexStreamCallIndex(item, key, _state)
+		delta := stringFromAny(item["delta"])
+		if delta == "" {
+			return false, nil
+		}
+		_state.hasToolCalls = true
+		_state.arguments[key] += delta
+		return false, writeCodexToolCallDelta(_w, _model, index, "", "", delta, _started, _metrics)
+	case "response.function_call_arguments.done":
+		key := codexStreamCallKey(item, nil)
+		index := codexStreamCallIndex(item, key, _state)
+		return false, writeCodexRemainingArguments(_w, _model, index, key, stringFromAny(item["arguments"]), _started, _metrics, _state)
 	case "response.completed":
 		if raw := item["response"]; raw != nil {
 			data, _ := json.Marshal(raw)
 			var completed codexCompleted
 			if err := json.Unmarshal(data, &completed); err == nil {
+				for _, call := range codexCompletedToolCalls(completed) {
+					callID := stringFromAny(call["id"])
+					if _state.emittedCalls[callID] {
+						continue
+					}
+					function, _ := call["function"].(map[string]interface{})
+					if err := writeCodexToolCallDelta(_w, _model, numberFieldOrZero(call, "index"), callID, stringFromAny(function["name"]), stringFromAny(function["arguments"]), _started, _metrics); err != nil {
+						return false, err
+					}
+					_state.emittedCalls[callID] = true
+					_state.hasToolCalls = true
+				}
+				finishReason := "stop"
+				if _state.hasToolCalls {
+					finishReason = "tool_calls"
+				}
 				chunk := map[string]interface{}{
 					"choices": []map[string]interface{}{
 						{
 							"index":         0,
 							"delta":         map[string]interface{}{},
-							"finish_reason": "stop",
+							"finish_reason": finishReason,
 						},
 					},
 					"model": firstNonEmpty(completed.Model, _model),
@@ -864,6 +1036,84 @@ func writeCodexEventAsChat(_w http.ResponseWriter, _eventName string, _payload s
 		}
 	}
 	return false, nil
+}
+
+// -------------------------------------------------------------------------------------
+func writeCodexFunctionItemAsChat(_w http.ResponseWriter, _model string, _event map[string]interface{}, _item map[string]interface{}, _started time.Time, _metrics *ChatMetrics, _state *codexChatStreamState) error {
+	key := codexStreamCallKey(_event, _item)
+	index := codexStreamCallIndex(_event, key, _state)
+	callID := firstNonEmpty(stringFromAny(_item["call_id"]), stringFromAny(_item["id"]), key)
+	name := strings.TrimSpace(stringFromAny(_item["name"]))
+	if !_state.emittedCalls[key] && !_state.emittedCalls[callID] {
+		if err := writeCodexToolCallDelta(_w, _model, index, callID, name, "", _started, _metrics); err != nil {
+			return err
+		}
+		_state.emittedCalls[key] = true
+		_state.emittedCalls[callID] = true
+	}
+	_state.hasToolCalls = true
+	return writeCodexRemainingArguments(_w, _model, index, key, stringFromAny(_item["arguments"]), _started, _metrics, _state)
+}
+
+// -------------------------------------------------------------------------------------
+func codexStreamCallKey(_event map[string]interface{}, _item map[string]interface{}) string {
+	if _item != nil {
+		if value := firstNonEmpty(stringFromAny(_item["id"]), stringFromAny(_item["call_id"])); value != "" {
+			return value
+		}
+	}
+	return firstNonEmpty(stringFromAny(_event["item_id"]), stringFromAny(_event["call_id"]), fmt.Sprintf("output_%d", numberFieldOrZero(_event, "output_index")))
+}
+
+// -------------------------------------------------------------------------------------
+func codexStreamCallIndex(_event map[string]interface{}, _key string, _state *codexChatStreamState) int {
+	if index, exists := _state.indexes[_key]; exists {
+		return index
+	}
+	index := numberFieldOrZero(_event, "output_index")
+	_state.indexes[_key] = index
+	return index
+}
+
+// -------------------------------------------------------------------------------------
+func writeCodexRemainingArguments(_w http.ResponseWriter, _model string, _index int, _key string, _arguments string, _started time.Time, _metrics *ChatMetrics, _state *codexChatStreamState) error {
+	if _arguments == "" {
+		return nil
+	}
+	emitted := _state.arguments[_key]
+	if emitted == _arguments {
+		return nil
+	}
+	remaining := strings.TrimPrefix(_arguments, emitted)
+	if emitted != "" && remaining == _arguments {
+		return nil
+	}
+	_state.arguments[_key] = emitted + remaining
+	return writeCodexToolCallDelta(_w, _model, _index, "", "", remaining, _started, _metrics)
+}
+
+// -------------------------------------------------------------------------------------
+func writeCodexToolCallDelta(_w http.ResponseWriter, _model string, _index int, _callID string, _name string, _arguments string, _started time.Time, _metrics *ChatMetrics) error {
+	function := map[string]interface{}{"arguments": _arguments}
+	if _name != "" {
+		function["name"] = _name
+	}
+	call := map[string]interface{}{
+		"index":    _index,
+		"function": function,
+	}
+	if _callID != "" {
+		call["id"] = _callID
+		call["type"] = "function"
+	}
+	chunk := map[string]interface{}{
+		"model": _model,
+		"choices": []map[string]interface{}{{
+			"index": 0,
+			"delta": map[string]interface{}{"tool_calls": []map[string]interface{}{call}},
+		}},
+	}
+	return writeOpenAIStreamChunk(_w, chunk, true, _started, _metrics)
 }
 
 // -------------------------------------------------------------------------------------

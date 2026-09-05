@@ -190,6 +190,30 @@ func StatusFor(providerID string) (Status, error) {
 	return NewStore(defaultTokenPath).Status(providerID)
 }
 
+// AccountStatusSnapshot 批次讀取本地帳號資訊，監看流程不更新 token 或連線上游。
+func AccountStatusSnapshot() (map[string]Status, error) {
+	s := NewStore(defaultTokenPath)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	records, err := s.loadLocked()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]Status, len(records))
+	for _, record := range records {
+		status := "expired"
+		if strings.TrimSpace(record.AccessToken) != "" && tokenUsable(record.ExpiresAt) {
+			status = "connected"
+		}
+		result[record.ProviderID] = Status{
+			ProviderID: record.ProviderID, Status: status, Flow: "oauth",
+			AccountEmail: record.AccountEmail, AccountName: record.AccountName,
+			ExpiresAt: record.ExpiresAt,
+		}
+	}
+	return result, nil
+}
+
 // -------------------------------------------------------------------------------------
 func CompleteManual(providerID string, input string) (OAuthTokenRecord, error) {
 	return NewStore(defaultTokenPath).CompleteManual(providerID, input)

@@ -563,6 +563,144 @@
       background: #fff;
     }
 
+    .reset-credit-panel {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px 12px;
+      min-height: 42px;
+      margin-top: 10px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .reset-credit-panel[hidden] {
+      display: none;
+    }
+
+    .reset-credit-copy {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      min-width: 0;
+      font-size: 14px;
+    }
+
+    .reset-credit-label {
+      font-weight: 800;
+    }
+
+    .reset-credit-count {
+      color: var(--muted);
+    }
+
+    .reset-credit-status {
+      grid-column: 1 / -1;
+      min-height: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .reset-credit-status:empty {
+      display: none;
+    }
+
+    .reset-credit-status.error {
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .text-button.reset-credit-use {
+      min-height: 36px;
+      color: var(--primary);
+      border-color: #a9cbbb;
+      white-space: nowrap;
+    }
+
+    .text-button.reset-credit-use:hover:not(:disabled) {
+      color: #fff;
+      border-color: var(--primary);
+      background: var(--primary);
+    }
+
+    .text-button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
+    .reset-confirm-dialog {
+      width: min(430px, calc(100vw - 32px));
+      padding: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: var(--text);
+      background: #fff;
+      box-shadow: 0 24px 60px rgba(18, 31, 44, .22);
+    }
+
+    .reset-confirm-dialog::backdrop {
+      background: rgba(31, 41, 51, .38);
+      backdrop-filter: blur(2px);
+    }
+
+    .reset-dialog-header,
+    .reset-dialog-actions {
+      display: flex;
+      align-items: center;
+      padding: 16px 18px;
+    }
+
+    .reset-dialog-header {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .reset-dialog-header h2 {
+      font-size: 17px;
+    }
+
+    .reset-dialog-body {
+      display: grid;
+      gap: 10px;
+      padding: 18px;
+    }
+
+    .reset-dialog-body p {
+      margin: 0;
+      line-height: 1.6;
+    }
+
+    .reset-dialog-expiry {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+    }
+
+    .reset-dialog-expiry span {
+      color: var(--muted);
+    }
+
+    .reset-dialog-expiry strong {
+      text-align: right;
+    }
+
+    .reset-dialog-message {
+      min-height: 18px;
+      color: var(--danger);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .reset-dialog-actions {
+      justify-content: flex-end;
+      gap: 10px;
+      border-top: 1px solid var(--line);
+    }
+
     .delete {
       color: var(--danger);
     }
@@ -799,6 +937,15 @@
               <option value="xhigh">xhigh</option>
             </select>
           </div>
+
+          <div class="reset-credit-panel" id="resetCreditPanel" hidden>
+            <div class="reset-credit-copy">
+              <span class="reset-credit-label">用量上限重置</span>
+              <span class="reset-credit-count" id="resetCreditCount">載入中...</span>
+            </div>
+            <button class="text-button reset-credit-use" type="button" id="resetCreditButton" disabled>使用重置</button>
+            <div class="reset-credit-status" id="resetCreditStatus" aria-live="polite"></div>
+          </div>
         </form>
 
         <aside class="side-block">
@@ -822,6 +969,24 @@
       </footer>
     </section>
   </main>
+
+  <dialog class="reset-confirm-dialog" id="resetConfirmDialog" aria-labelledby="resetConfirmTitle" aria-describedby="resetConfirmText resetConfirmExpiresAt">
+    <div class="reset-dialog-header">
+      <h2 id="resetConfirmTitle">確認使用重置</h2>
+    </div>
+    <div class="reset-dialog-body">
+      <p id="resetConfirmText"></p>
+      <div class="reset-dialog-expiry">
+        <span>到期時間 (expires_at)</span>
+        <strong id="resetConfirmExpiresAt">未提供</strong>
+      </div>
+      <div class="reset-dialog-message" id="resetConfirmMessage" aria-live="assertive"></div>
+    </div>
+    <div class="reset-dialog-actions">
+      <button class="text-button" type="button" id="resetConfirmCancel">取消</button>
+      <button class="text-button primary" type="button" id="resetConfirmSubmit">確認重置</button>
+    </div>
+  </dialog>
 
   <script>
     const providerTemplates = {
@@ -939,6 +1104,12 @@
     let selectedId = null;
     let snapshot = null;
     let modelLoadSeq = 0;
+    let resetCreditLoadSeq = 0;
+    let resetCreditCount = null;
+    let resetCreditExpiresAt = null;
+    let resetCreditHasDetails = false;
+    let pendingResetProviderId = "";
+    let pendingResetIdempotencyKey = "";
     let draggedProviderId = "";
     const API_KEY_MASK = "••••••••••••";
 
@@ -958,6 +1129,16 @@
     const oauthCompleteButton = document.getElementById("oauthCompleteButton");
     const oauthManualMessage = document.getElementById("oauthManualMessage");
     const capabilityGrid = document.getElementById("capabilityGrid");
+    const resetCreditPanel = document.getElementById("resetCreditPanel");
+    const resetCreditCountLabel = document.getElementById("resetCreditCount");
+    const resetCreditButton = document.getElementById("resetCreditButton");
+    const resetCreditStatus = document.getElementById("resetCreditStatus");
+    const resetConfirmDialog = document.getElementById("resetConfirmDialog");
+    const resetConfirmText = document.getElementById("resetConfirmText");
+    const resetConfirmExpiresAt = document.getElementById("resetConfirmExpiresAt");
+    const resetConfirmMessage = document.getElementById("resetConfirmMessage");
+    const resetConfirmCancel = document.getElementById("resetConfirmCancel");
+    const resetConfirmSubmit = document.getElementById("resetConfirmSubmit");
 
     const capabilityDefinitions = [
       { value: "chat", label: "對話" },
@@ -1303,6 +1484,8 @@
       if (!provider) {
         providerForm.hidden = true;
         editorBody.querySelector(".side-block").hidden = true;
+        resetCreditLoadSeq += 1;
+        resetCreditPanel.hidden = true;
         return;
       }
 
@@ -1321,6 +1504,7 @@
 
       updateEditorHeader(provider);
       syncOAuthButton(provider);
+      syncResetCreditPanel(provider);
       renderCapabilities(provider);
       loadModelOptions(provider);
     }
@@ -1364,6 +1548,145 @@
         return;
       }
       oauthButton.textContent = "OAuth 登入";
+    }
+
+    function syncResetCreditPanel(provider) {
+      const supported = providerOAuthSupported(provider) && provider.oauth && provider.id;
+      resetCreditLoadSeq += 1;
+      resetCreditPanel.hidden = !supported;
+      resetCreditCount = null;
+      resetCreditExpiresAt = null;
+      resetCreditHasDetails = false;
+      resetCreditStatus.textContent = "";
+      resetCreditStatus.classList.remove("error");
+      resetCreditButton.disabled = true;
+      if (!supported) {
+        return;
+      }
+      resetCreditCountLabel.textContent = "載入中...";
+      loadResetCreditCount(provider, resetCreditLoadSeq);
+    }
+
+    async function loadResetCreditCount(provider, ticket = ++resetCreditLoadSeq) {
+      try {
+        const payload = await apiRequest(`api/provider-configs/${encodeURIComponent(provider.id)}/rate-limit-reset`);
+        if (ticket !== resetCreditLoadSeq || provider.id !== selectedId) {
+          return;
+        }
+        resetCreditCount = Math.max(0, Number(payload.availableCount) || 0);
+        resetCreditExpiresAt = typeof payload.expiresAt === "string" ? payload.expiresAt : null;
+        resetCreditHasDetails = payload.hasCreditDetails === true;
+        resetCreditCountLabel.textContent = `可用 ${resetCreditCount} 次`;
+        resetCreditButton.disabled = resetCreditCount < 1;
+        resetCreditStatus.textContent = "";
+        resetCreditStatus.classList.remove("error");
+      } catch (err) {
+        if (ticket !== resetCreditLoadSeq || provider.id !== selectedId) {
+          return;
+        }
+        resetCreditCount = null;
+        resetCreditExpiresAt = null;
+        resetCreditHasDetails = false;
+        resetCreditCountLabel.textContent = "無法取得";
+        resetCreditButton.disabled = true;
+        resetCreditStatus.textContent = err.message || "無法取得重置次數";
+        resetCreditStatus.classList.add("error");
+      }
+    }
+
+    function createResetIdempotencyKey() {
+      if (window.crypto?.randomUUID) {
+        return window.crypto.randomUUID();
+      }
+      const randomPart = Math.random().toString(36).slice(2);
+      return `reset-${Date.now()}-${randomPart}`;
+    }
+
+    function formatResetCreditExpiry() {
+      if (!resetCreditHasDetails) {
+        return "上游未提供";
+      }
+      if (!resetCreditExpiresAt) {
+        return "無到期時間";
+      }
+      const expiresAt = new Date(resetCreditExpiresAt);
+      if (Number.isNaN(expiresAt.getTime())) {
+        return resetCreditExpiresAt;
+      }
+      return new Intl.DateTimeFormat("zh-TW", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        timeZoneName: "short"
+      }).format(expiresAt);
+    }
+
+    function openResetConfirmation() {
+      const provider = currentProvider();
+      if (!provider || resetCreditCount === null || resetCreditCount < 1) {
+        return;
+      }
+      pendingResetProviderId = provider.id;
+      pendingResetIdempotencyKey = createResetIdempotencyKey();
+      resetConfirmText.textContent = `確定要為「${provider.name}」使用 1 次用量上限重置嗎？目前可用 ${resetCreditCount} 次。`;
+      resetConfirmExpiresAt.textContent = formatResetCreditExpiry();
+      resetConfirmExpiresAt.title = resetCreditExpiresAt || "";
+      resetConfirmMessage.textContent = "";
+      resetConfirmSubmit.disabled = false;
+      resetConfirmSubmit.textContent = "確認重置";
+      resetConfirmDialog.showModal();
+    }
+
+    function clearResetConfirmation() {
+      pendingResetProviderId = "";
+      pendingResetIdempotencyKey = "";
+      resetConfirmMessage.textContent = "";
+      resetConfirmSubmit.disabled = false;
+      resetConfirmSubmit.textContent = "確認重置";
+    }
+
+    async function consumeResetCredit() {
+      if (!pendingResetProviderId || !pendingResetIdempotencyKey) {
+        return;
+      }
+      const providerId = pendingResetProviderId;
+      resetConfirmSubmit.disabled = true;
+      resetConfirmSubmit.textContent = "重置中...";
+      resetConfirmMessage.textContent = "";
+      try {
+        const payload = await apiRequest(`api/provider-configs/${encodeURIComponent(providerId)}/rate-limit-reset`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ idempotencyKey: pendingResetIdempotencyKey })
+        });
+        const outcome = String(payload.outcome || "");
+        resetConfirmDialog.close();
+        clearResetConfirmation();
+
+        const provider = providers.find(item => item.id === providerId);
+        if (provider && provider.id === selectedId) {
+          await loadResetCreditCount(provider);
+          if (outcome === "reset") {
+            resetCreditStatus.textContent = payload.windowsReset > 0
+              ? `重置完成，已重置 ${payload.windowsReset} 個用量視窗。`
+              : "重置完成。";
+          } else if (outcome === "already_redeemed") {
+            resetCreditStatus.textContent = "此重置請求先前已完成。";
+          } else if (outcome === "no_credit") {
+            resetCreditStatus.textContent = "目前沒有可用的重置次數。";
+          } else {
+            resetCreditStatus.textContent = "目前用量尚未達可重置條件。";
+          }
+          resetCreditStatus.classList.toggle("error", outcome === "no_credit" || outcome === "nothing_to_reset");
+        }
+      } catch (err) {
+        resetConfirmMessage.textContent = `${err.message || "重置失敗"}。可重試本次操作，系統不會重複扣除。`;
+        resetConfirmSubmit.disabled = false;
+        resetConfirmSubmit.textContent = "重試";
+      }
     }
 
     function setOAuthManualMode(enabled, message = "", type = "") {
@@ -1755,6 +2078,20 @@
     });
 
     capabilityGrid.addEventListener("change", syncFromForm);
+
+    resetCreditButton.addEventListener("click", openResetConfirmation);
+    resetConfirmSubmit.addEventListener("click", consumeResetCredit);
+    resetConfirmCancel.addEventListener("click", () => resetConfirmDialog.close());
+    resetConfirmDialog.addEventListener("cancel", event => {
+      if (resetConfirmSubmit.disabled) {
+        event.preventDefault();
+      }
+    });
+    resetConfirmDialog.addEventListener("close", () => {
+      if (!resetConfirmSubmit.disabled) {
+        clearResetConfirmation();
+      }
+    });
 
     document.getElementById("addProvider").addEventListener("click", async () => {
       const provider = createProvider("openai", false);

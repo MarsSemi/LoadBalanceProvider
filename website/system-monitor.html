@@ -169,8 +169,20 @@
       text-overflow: ellipsis;
     }
 
-    .chart-section { padding: 19px 18px 16px; }
-    .chart-section + .chart-section { border-top: 1px solid var(--line); }
+    .chart-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      padding: 16px;
+      background: #fbfbfb;
+    }
+    .chart-section {
+      min-width: 0;
+      padding: 19px 18px 16px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+    }
     .chart-heading {
       display: flex;
       align-items: start;
@@ -301,7 +313,7 @@
       .page { width: min(100% - 24px, 680px); margin-top: 22px; }
       .hero, .toolbar { align-items: stretch; flex-direction: column; }
       .toolbar-status { text-align: left; }
-      .summary-grid, .details-grid { grid-template-columns: 1fr; }
+      .summary-grid, .details-grid, .chart-grid { grid-template-columns: 1fr; }
       .details-card.wide { grid-column: auto; }
       .chart-wrap { height: 190px; }
       .summary-card { min-height: 92px; }
@@ -400,26 +412,28 @@
           </article>
         </div>
 
-        <section class="chart-section">
-          <div class="chart-heading"><div><div class="chart-title">CPU Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--blue)"><button class="legend-item" type="button" data-series="cpu" aria-pressed="true"><span class="legend-dot"></span>CPU</button></div></div>
-          <div class="chart-wrap"><canvas id="cpuChart"></canvas><div class="chart-empty" id="cpuChartEmpty">所選區間尚無資料</div></div>
-        </section>
-        <section class="chart-section">
-          <div class="chart-heading"><div><div class="chart-title">GPU Usage</div><div class="chart-note">可辨識 GPU 裝置的平均使用率</div></div><div class="legend" style="color:var(--magenta)"><button class="legend-item" type="button" data-series="gpu" aria-pressed="true"><span class="legend-dot"></span>GPU</button></div></div>
-          <div class="chart-wrap"><canvas id="gpuChart"></canvas><div class="chart-empty" id="gpuChartEmpty">尚未偵測到 GPU 使用率</div></div>
-        </section>
-        <section class="chart-section">
-          <div class="chart-heading"><div><div class="chart-title">Memory Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--green)"><button class="legend-item" type="button" data-series="memory" aria-pressed="true"><span class="legend-dot"></span>記憶體</button></div></div>
-          <div class="chart-wrap"><canvas id="memoryChart"></canvas><div class="chart-empty" id="memoryChartEmpty">所選區間尚無資料</div></div>
-        </section>
-        <section class="chart-section">
-          <div class="chart-heading"><div><div class="chart-title">Disk Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--amber)"><button class="legend-item" type="button" data-series="disk" aria-pressed="true"><span class="legend-dot"></span>磁碟</button></div></div>
-          <div class="chart-wrap"><canvas id="diskChart"></canvas><div class="chart-empty" id="diskChartEmpty">所選區間尚無資料</div></div>
-        </section>
-        <section class="chart-section">
-          <div class="chart-heading"><div><div class="chart-title">網路流量</div><div class="chart-note">每秒接收與傳送位元組數</div></div><div class="legend"><button class="legend-item" type="button" data-series="rx" aria-pressed="true" style="color:var(--cyan)"><span class="legend-dot"></span>接收</button><button class="legend-item" type="button" data-series="tx" aria-pressed="true" style="color:var(--red)"><span class="legend-dot"></span>傳送</button></div></div>
-          <div class="chart-wrap"><canvas id="networkChart"></canvas><div class="chart-empty" id="networkChartEmpty">所選區間尚無資料</div></div>
-        </section>
+        <div class="chart-grid">
+          <section class="chart-section">
+            <div class="chart-heading"><div><div class="chart-title">CPU Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--blue)"><button class="legend-item" type="button" data-series="cpu" aria-pressed="true"><span class="legend-dot"></span>CPU</button></div></div>
+            <div class="chart-wrap"><canvas id="cpuChart"></canvas><div class="chart-empty" id="cpuChartEmpty">所選區間尚無資料</div></div>
+          </section>
+          <section class="chart-section">
+            <div class="chart-heading"><div><div class="chart-title">GPU Usage</div><div class="chart-note">可辨識 GPU 裝置的平均使用率</div></div><div class="legend" style="color:var(--magenta)"><button class="legend-item" type="button" data-series="gpu" aria-pressed="true"><span class="legend-dot"></span>GPU</button></div></div>
+            <div class="chart-wrap"><canvas id="gpuChart"></canvas><div class="chart-empty" id="gpuChartEmpty">尚未偵測到 GPU 使用率</div></div>
+          </section>
+          <section class="chart-section">
+            <div class="chart-heading"><div><div class="chart-title">Memory Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--green)"><button class="legend-item" type="button" data-series="memory" aria-pressed="true"><span class="legend-dot"></span>記憶體</button></div></div>
+            <div class="chart-wrap"><canvas id="memoryChart"></canvas><div class="chart-empty" id="memoryChartEmpty">所選區間尚無資料</div></div>
+          </section>
+          <section class="chart-section">
+            <div class="chart-heading"><div><div class="chart-title">Disk Usage</div><div class="chart-note">所選區間平均使用率</div></div><div class="legend" style="color:var(--amber)"><button class="legend-item" type="button" data-series="disk" aria-pressed="true"><span class="legend-dot"></span>磁碟</button></div></div>
+            <div class="chart-wrap"><canvas id="diskChart"></canvas><div class="chart-empty" id="diskChartEmpty">所選區間尚無資料</div></div>
+          </section>
+          <section class="chart-section">
+            <div class="chart-heading"><div><div class="chart-title">網路流量</div><div class="chart-note">每秒接收與傳送位元組數</div></div><div class="legend"><button class="legend-item" type="button" data-series="rx" aria-pressed="true" style="color:var(--cyan)"><span class="legend-dot"></span>接收</button><button class="legend-item" type="button" data-series="tx" aria-pressed="true" style="color:var(--red)"><span class="legend-dot"></span>傳送</button></div></div>
+            <div class="chart-wrap"><canvas id="networkChart"></canvas><div class="chart-empty" id="networkChartEmpty">所選區間尚無資料</div></div>
+          </section>
+        </div>
       </section>
     </section>
 

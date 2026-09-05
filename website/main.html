@@ -195,6 +195,15 @@
       margin-bottom: 30px;
     }
 
+    .dashboard-update-status {
+      min-height: 20px;
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+    }
+
     .eyebrow {
       color: var(--muted);
       font-size: 13px;
@@ -1590,7 +1599,7 @@
       color: #fff;
     }
 
-    @media (max-width: 1280px) {
+    @media (max-width: 1480px) {
       .topbar {
         grid-template-columns: max-content minmax(0, 1fr) max-content;
         gap: 12px;
@@ -1762,6 +1771,8 @@
           </select>
         </div>
       </section>
+
+      <p class="dashboard-update-status" id="dashboardUpdateStatus" role="status">正在取得資料...</p>
 
       <section class="metric-grid" aria-label="核心指標">
         <article class="metric-card">
@@ -2365,7 +2376,7 @@
 
   <script>
     const WEB_SESSION_KEY_STORAGE = "lbp.sessionApiKey";
-    const DASHBOARD_CACHE_TTL_MS = 30000;
+    const DASHBOARD_CACHE_TTL_MS = 60000;
 
     const state = {
       providers: [],
@@ -2436,7 +2447,13 @@
       providerRenderSignature: "",
       dashboardLoadedAt: 0,
       dashboardInitialized: false,
-      dashboardLoadPromise: null
+      dashboardLoadPromise: null,
+      dashboardRetryTimer: null,
+      dashboardRetryDelay: 1000,
+      dashboardRefreshing: false,
+      dashboardHistoryReady: false,
+      dashboardBaselinesReady: false,
+      dashboardBaselineRevision: 0
     };
 
     let chartLibraryPromise = null;
@@ -2701,19 +2718,35 @@
         return state.dashboardLoadPromise;
       }
 
+      window.clearTimeout(state.dashboardRetryTimer);
+      const baselineRevision = state.dashboardBaselineRevision;
+
       state.dashboardLoadPromise = (async () => {
         try {
-          const [configs, health, baselines] = await Promise.all([
-            apiRequest("api/provider-configs"),
-            apiRequest("api/health"),
-            apiRequest("api/dashboard-metric-baselines")
-          ]);
-          state.providers = configs.providers || [];
-          state.status = health.providers || [];
-          state.metricBaselines = normalizeMetricBaselines(baselines);
+          const snapshot = await apiRequest("api/dashboard", { signal: AbortSignal.timeout(15000) });
+          state.providers = snapshot.providers || [];
+          state.status = snapshot.status || [];
+          state.dashboardHistoryReady = snapshot.historyReady === true;
+          if (baselineRevision === state.dashboardBaselineRevision) {
+            state.dashboardBaselinesReady = snapshot.baselinesReady === true;
+            if (state.dashboardBaselinesReady) {
+              state.metricBaselines = normalizeMetricBaselines(snapshot.baselines);
+            }
+          }
+          state.dashboardRefreshing = snapshot.refreshing === true;
           state.dashboardLoadedAt = Date.now();
           state.dashboardInitialized = true;
           render();
+          const updatedAt = formatDateTime(snapshot.updatedAt);
+          const historyAt = state.dashboardHistoryReady ? formatDateTime(snapshot.historyUpdatedAt) : "待更新";
+          const message = snapshot.refreshError || (state.dashboardRefreshing ? "背景更新中" : "");
+          document.getElementById("dashboardUpdateStatus").textContent =
+            `最後更新：${updatedAt} · 歷史統計：${historyAt}${message ? ` · ${message}` : ""}`;
+          if (state.dashboardRefreshing) {
+            scheduleDashboardUpdate();
+          } else {
+            state.dashboardRetryDelay = 1000;
+          }
           return true;
         } catch (_err) {
           if (!state.dashboardInitialized) {
@@ -2722,12 +2755,25 @@
             state.metricBaselines = { providers: {} };
             render();
           }
+          document.getElementById("dashboardUpdateStatus").textContent = state.dashboardInitialized
+            ? "更新失敗，保留上次資料，稍後重試。" : "資料暫時無法取得，稍後重試。";
+          scheduleDashboardUpdate();
           return false;
         } finally {
           state.dashboardLoadPromise = null;
         }
       })();
       return state.dashboardLoadPromise;
+    }
+
+    function scheduleDashboardUpdate() {
+      window.clearTimeout(state.dashboardRetryTimer);
+      state.dashboardRetryTimer = window.setTimeout(() => {
+        if (!document.hidden && document.getElementById("dashboardView").classList.contains("active")) {
+          void loadData({ force: true });
+        }
+      }, state.dashboardRetryDelay);
+      state.dashboardRetryDelay = Math.min(state.dashboardRetryDelay * 2, 30000);
     }
 
     async function loadVersion() {
@@ -2931,9 +2977,11 @@
 
     function render() {
       const providerMap = new Map(state.providers.map(provider => [provider.id, provider]));
+      const statusMap = new Map(state.status.map(item => [item.id, item]));
       const selected = els.providerFilter.value;
       const filteredStatus = selected ? state.status.filter(item => item.id === selected) : state.status;
       const cumulativeMode = state.metricMode === "cumulative";
+      const statisticsReady = state.dashboardHistoryReady && state.dashboardBaselinesReady;
       const total = state.providers.length;
       const enabled = state.providers.filter(provider => provider.enabled).length;
       const active = filteredStatus.reduce((sum, item) => sum + Number(item.active_requests || item.active || 0), 0);
@@ -2967,20 +3015,30 @@
 
       els.providerCount.textContent = String(total);
       els.enabledCountLabel.textContent = cumulativeMode ? "累積回應 Token 數" : "啟用 Provider";
-      els.enabledCount.textContent = cumulativeMode ? formatCumulativeCount(cumulativeResponseTokens) : String(enabled);
+      els.enabledCount.textContent = cumulativeMode ? (statisticsReady ? formatCumulativeCount(cumulativeResponseTokens) : "--") : String(enabled);
       els.reactionTime.textContent = formatDuration(avgReaction);
       els.avgDuration.textContent = formatDuration(avgLatency);
       els.activeRequestsLabel.textContent = cumulativeMode ? "累積請求" : "目前活躍請求";
-      els.activeRequests.textContent = cumulativeMode ? formatCumulativeCount(cumulativeRequests) : String(active);
-      // null 代表沒有任何啟用中的 provider 回報配額上限，等同不受限制。
-      // 顯示 ∞ 符號，並同步維護 title，避免切回百分比後殘留「無限制」的提示。
-      const unlimitedQuota = totalRemaining === null;
-      els.totalRemaining.textContent = unlimitedQuota ? "∞" : percentText(totalRemaining);
-      els.totalRemaining.title = unlimitedQuota ? "無限制" : "";
+      els.activeRequests.textContent = cumulativeMode ? (statisticsReady ? formatCumulativeCount(cumulativeRequests) : "--") : String(active);
+      // 尚未取得配額與確定無限制是不同狀態，缺少資料時不當成零或無限額度。
+      const quotaReady = state.dashboardInitialized && state.providers.filter(provider => provider.enabled).every(provider => {
+        const item = statusMap.get(provider.id);
+        return item && providerHasUsageInfo(item, item.usage || {});
+      });
+      const unlimitedQuota = quotaReady && totalRemaining === null;
+      els.totalRemaining.textContent = !quotaReady ? "--" : unlimitedQuota ? "∞" : percentText(totalRemaining);
+      els.totalRemaining.title = !quotaReady ? "待更新" : unlimitedQuota ? "無限制" : "";
       els.tokenSpeed.textContent = `${formatSpeed(avgTokenSpeed)} tok/s`;
       els.streamOutSpeed.textContent = `${formatSpeed(avgStreamOutSpeed)} tok/s`;
       els.loadBar.style.width = `${loadPercent}%`;
       els.loadText.textContent = `${active} / ${capacity}`;
+      document.getElementById("refreshButton").disabled = !statisticsReady;
+      if (!state.dashboardBaselinesReady) {
+        els.reactionTime.textContent = "--";
+        els.avgDuration.textContent = "--";
+        els.tokenSpeed.textContent = "--";
+        els.streamOutSpeed.textContent = "--";
+      }
 
       syncMetricSegments();
       syncProviderFilter();
@@ -3104,7 +3162,9 @@
         mode: state.metricMode,
         items: statusItems,
         providers: statusItems.map(item => providerMap.get(item.id) || null),
-        baselines: state.metricBaselines
+        baselines: state.metricBaselines,
+        historyReady: state.dashboardHistoryReady,
+        baselinesReady: state.dashboardBaselinesReady
       });
       if (signature === state.providerRenderSignature) {
         updateProviderScrollButtons();
@@ -3118,8 +3178,9 @@
       }
 
       const previousScroll = Number(state.providerListScrollLeft || els.providerList.scrollLeft || 0);
-      els.providerList.innerHTML = "";
-      statusItems.forEach(item => {
+      const existing = new Map(Array.from(els.providerList.querySelectorAll(".provider-cell"), cell => [cell.dataset.providerId, cell]));
+      els.providerList.querySelector(".empty")?.remove();
+      statusItems.forEach((item, index) => {
         const provider = providerMap.get(item.id) || {};
         const model = Array.isArray(item.models) && item.models[0] ? item.models[0].name : provider.model || "未指定模型";
         const durationMS = displayProcessingTime(item);
@@ -3130,22 +3191,39 @@
         const requestLabel = state.metricMode === "cumulative" ? "累積請求" : "請求數";
         // 綁定數＝目前被對話黏著釘在這個 Provider 的對話數（prompt_cache_key 對應）。
         const boundCount = Number(item.bound_conversations || 0);
-        const cell = document.createElement("article");
-        cell.className = "provider-cell";
-        cell.innerHTML = `
+        let cell = existing.get(item.id);
+        if (!cell) {
+          cell = document.createElement("article");
+          cell.className = "provider-cell";
+          cell.dataset.providerId = item.id;
+          cell.addEventListener("mouseenter", event => showProviderUsageTooltip(event, cell.dashboardItem, cell.dashboardProvider));
+          cell.addEventListener("mousemove", moveProviderUsageTooltip);
+          cell.addEventListener("mouseleave", hideProviderUsageTooltip);
+        }
+        existing.delete(item.id);
+        cell.dashboardItem = item;
+        cell.dashboardProvider = provider;
+        const requestText = (state.metricMode !== "cumulative" || state.dashboardHistoryReady) && state.dashboardBaselinesReady
+          ? requestCount.toLocaleString(window.LBPI18n?.locale() || "zh-TW") : "--";
+        const timingText = state.dashboardBaselinesReady ? `${formatDuration(durationMS)} · ${formatSpeed(tokenSpeed)} tok/s` : "待更新";
+        const content = `
           <div class="provider-name">
             <span class="status-dot ${providerStatusDotClass(item)}"></span>
             <span>${escapeHtml(item.name || provider.name || item.id)}</span>
           </div>
           <div class="provider-meta">${escapeHtml(model)}</div>
-          <div class="provider-meta">${requestLabel} ${requestCount.toLocaleString(window.LBPI18n?.locale() || "zh-TW")} · 綁定數 ${boundCount} · 活躍數 ${activeCount} / ${maxConcurrent}</div>
-          <div class="provider-meta">${formatDuration(durationMS)} · ${formatSpeed(tokenSpeed)} tok/s</div>
+          <div class="provider-meta">${requestLabel} ${requestText} · 綁定數 ${boundCount} · 活躍數 ${activeCount} / ${maxConcurrent}</div>
+          <div class="provider-meta">${timingText}</div>
         `;
-        cell.addEventListener("mouseenter", event => showProviderUsageTooltip(event, item, provider));
-        cell.addEventListener("mousemove", moveProviderUsageTooltip);
-        cell.addEventListener("mouseleave", hideProviderUsageTooltip);
-        els.providerList.appendChild(cell);
+        if (cell.dashboardContent !== content) {
+          cell.innerHTML = content;
+          cell.dashboardContent = content;
+        }
+        if (els.providerList.children[index] !== cell) {
+          els.providerList.insertBefore(cell, els.providerList.children[index] || null);
+        }
       });
+      existing.forEach(cell => cell.remove());
       requestAnimationFrame(() => {
         const maxScroll = providerListMaxScroll();
         els.providerList.scrollLeft = Math.min(previousScroll, maxScroll);
@@ -3597,6 +3675,8 @@
         body: JSON.stringify({ providers })
       });
       state.metricBaselines = normalizeMetricBaselines(payload);
+      state.dashboardBaselineRevision += 1;
+      state.dashboardBaselinesReady = true;
     }
 
     async function resetMetricBaselines() {
@@ -3624,6 +3704,7 @@
     }
 
     function openResetConfirmModal() {
+      if (!state.dashboardHistoryReady || !state.dashboardBaselinesReady) return;
       const selectedProviderID = els.providerFilter.value;
       const selectedProvider = state.providers.find(provider => provider.id === selectedProviderID);
       const scopeText = selectedProviderID ? `「${selectedProvider?.name || selectedProviderID}」` : "所有模型";
@@ -4778,7 +4859,7 @@
       if (viewId === "dashboardView") {
         if (state.dashboardInitialized) {
           render();
-          if (!dashboardCacheIsFresh()) {
+          if (!dashboardCacheIsFresh() || state.dashboardRefreshing) {
             void loadData({ force: true });
           }
           return Promise.resolve();
@@ -5061,10 +5142,8 @@
           return;
         }
         updateLoadingDialog("正在取得 Provider 與服務統計...");
-        await Promise.all([
-          loadVersion(),
-          activateView(initialViewId(), window.location.hash || "#dashboard")
-        ]);
+        void loadVersion();
+        await activateView(initialViewId(), window.location.hash || "#dashboard");
         window.setInterval(checkSession, 60000);
       } finally {
         hideLoadingDialog();
@@ -5072,11 +5151,18 @@
     }
 
     initializeApp();
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        window.clearTimeout(state.dashboardRetryTimer);
+      } else if (document.getElementById("dashboardView").classList.contains("active")) {
+        void loadData({ force: state.dashboardRefreshing });
+      }
+    });
     window.setInterval(() => {
-      if (document.getElementById("dashboardView").classList.contains("active")) {
+      if (!document.hidden && document.getElementById("dashboardView").classList.contains("active")) {
         loadData();
       }
-    }, 10000);
+    }, 60000);
     window.setInterval(() => {
       if (
         document.getElementById("settingsView").classList.contains("active") &&
