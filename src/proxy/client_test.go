@@ -957,7 +957,7 @@ data: {"type":"response.failed","response":{"id":"resp_test","error":{"message":
 }
 
 // -------------------------------------------------------------------------------------
-func TestProviderStreamHeartbeatResetsIdleTimeout(t *testing.T) {
+func TestProviderStreamProgressResetsIdleTimeout(t *testing.T) {
 	_reader, _writer := io.Pipe()
 	_idleReader := newStreamIdleTimeoutReader(_reader, 60*time.Millisecond)
 	defer _idleReader.Stop()
@@ -968,7 +968,7 @@ func TestProviderStreamHeartbeatResetsIdleTimeout(t *testing.T) {
 	go readProviderStream(_idleReader, time.Now(), true, _events, _result, _done)
 
 	for _index := 0; _index < 4; _index++ {
-		_, _ = _writer.Write([]byte("event: ping\ndata: {\"type\":\"ping\"}\n\n"))
+		_, _ = _writer.Write([]byte("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n"))
 		time.Sleep(25 * time.Millisecond)
 	}
 	_, _ = _writer.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-5.5\"}}\n\n"))
@@ -1079,7 +1079,7 @@ func TestResponsesTransportFailureAfterContentEmitsErrorTerminal(t *testing.T) {
 	}
 
 	_body := _recorder.Body.String()
-	if !strings.Contains(_body, "event: error") || !strings.Contains(_body, "INTERNAL_ERROR") {
+	if !strings.Contains(_body, "event: response.failed") || !strings.Contains(_body, "INTERNAL_ERROR") {
 		t.Fatalf("expected the upstream transport error to reach the client, got %q", _body)
 	}
 	if strings.Contains(_body, "data: [DONE]") {
@@ -1111,7 +1111,7 @@ func TestResponsesMissingTerminalAfterContentEmitsErrorTerminal(t *testing.T) {
 	}
 
 	_body := _recorder.Body.String()
-	if !strings.Contains(_body, "event: error") || !strings.Contains(_body, "closed before a Responses terminal event") {
+	if !strings.Contains(_body, "event: response.failed") || !strings.Contains(_body, "closed before a Responses terminal event") {
 		t.Fatalf("expected a deterministic Responses error terminal, got %q", _body)
 	}
 	if strings.Contains(_body, "data: [DONE]") {

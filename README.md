@@ -33,6 +33,16 @@
 
 ## API
 
+### 儀表板快照
+
+管理頁面使用 `GET /api/dashboard`，僅供 Web 管理登入存取。首屏回傳必要的 Provider 資訊、記憶體中的執行狀態與剩餘量快照，不等待 OAuth 更新或歷史檔案掃描，也不傳送完整模型 catalog、金鑰欄位及 Provider 編輯設定。
+
+帳號資訊以一次本地批次讀取取得，不觸發 token 更新；統計基準與歷史累計由同一服務實例共用的背景工作補齊，每次更新完成後快取 60 秒，多個使用者不會各自啟動重複工作。OAuth 更新與上游用量查詢沿用既有背景刷新及實際請求流程。歷史掃描採獨立鎖，不在掃描期間持有請求紀錄寫入鎖。
+
+回應包含 `updatedAt`、`historyUpdatedAt`、`accountsUpdatedAt`、`refreshing`、`historyReady`、`accountsReady`、`baselinesReady` 與 `refreshError`。前端先顯示快照，背景更新期間逐步補取；未就緒的累計統計、基準相關指標或缺少的配額顯示待更新狀態。只有統計與基準就緒後才允許歸零。歸零成功會立即更新後端基準快取。
+
+一般刷新及 TAB 快取為 60 秒，背景補取／失敗重試採 1、2、4 秒逐步增加至最多 30 秒的間隔。離開儀表板或瀏覽器分頁隱藏時暫停補取，更新失敗保留已有畫面；頁面顯示快照及歷史統計的更新時間。每日用量圖表仍在開啟對話框時才讀取。
+
 ### Chat Completions
 
 ```http
@@ -73,6 +83,17 @@ Authorization: Bearer <client-token>
 ```
 
 Responses API 亦支援既有 response 的查詢、刪除、取消、輸入項目與 input token 計算等相容子路由；服務會將請求轉送至建立該 response 的 Provider，並以呼叫端 API Key 隔離路由資料。
+
+#### 串流連線與故障恢復
+
+- 上游尚未送出有效內容時，服務暫存初始化事件與待轉送請求；遇到可重試故障可重新選擇 Provider，期間維持同一條下游連線並傳送心跳。失敗嘗試的初始化事件不會混入成功回應。
+- 一旦文字或工具呼叫已轉送至下游，就不再切換 Provider 或重播該請求，避免重複執行。Responses 串流失敗使用 `response.failed` 結束並帶出原因，不將失敗偽裝成成功完成。
+- 請求格式、上下文長度與政策拒絕等請求本身的錯誤不會觸發容量冷卻；模型不存在或明確的模型過載只冷卻該 Provider 的該模型，帳號配額與限流則冷卻整個 Provider。有效的 `Retry-After` 優先於預設冷卻秒數，同一個有效冷卻窗口不會因並發失敗持續延長。
+- 候選 Provider 都在容量冷卻且可在剩餘等待預算內恢復時，串流請求會保持連線等待再選路由。每個請求累計冷卻等待上限為 `30` 秒，不因切換 Provider 重設；此上限不包含上游執行時間，實際請求重試仍受 `retry_count` 限制。
+- Codex OAuth 依 Provider 身分合併並發 token 刷新；遇到 HTTP `401` 時，OAuth 請求最多刷新並重送一次。若其他請求已完成刷新，直接使用新 token；API key 認證不套用 OAuth 刷新。
+- Responses 完成事件若缺少 `output` 或項目 ID，會以同一串流已收到的 `response.output_item.done` 完整項目補齊，不覆蓋既有內容，也不以未完成的 delta 組合工具參數。
+
+這些處理可降低上游暫時故障造成的重新連線，但無法保證跨反向代理、用戶端或網路中斷後仍維持連線。等待回應標頭與串流無進展逾時由 Provider 的 `timeout_seconds` 控制；上游純心跳不會延長無進展期限。部署時亦需確認反向代理未緩衝 SSE，詳見 [部署手冊](DEPLOY.md#串流連線與反向代理)。
 
 #### 長任務 Prompt Cache 黏著
 
@@ -166,6 +187,8 @@ API Key 可呼叫一般 REST API 與 MCP；Web 登入暫時金鑰不能呼叫 MC
 
 Provider 以 `data/llm_proxy.json` 的 `providers` 設定。`enabled` 預設範例為 `false`，正式使用前需改為 `true` 並設定對應 API key 環境變數。
 Provider 與通知目標 URL 只允許 `http`/`https`，並阻擋 link-local、unspecified、multicast 等位址；private CIDR 與 localhost/loopback 暫時允許供內網模型服務使用。
+
+Codex OAuth 的模型清單由上游動態取得，上游會依 `client_version` 決定可見模型。管理介面的模型查詢預設宣告 Codex `0.153.0`；日後可在服務啟動環境設定 `MARS_CODEX_MODELS_CLIENT_VERSION` 為已確認可用的新版 Codex 版本，重新啟動服務後重新整理模型清單。查詢的 `Version` 與預設 `User-Agent` 會同步使用此版本；若 Codex 呼叫端已提供 `client_version` 或 `Version`，仍優先保留呼叫端版本。實際可用模型由該 Provider 的 OAuth 帳號及上游回應決定。
 
 ```json
 {

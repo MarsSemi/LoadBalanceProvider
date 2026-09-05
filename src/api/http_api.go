@@ -3021,7 +3021,7 @@ func (_h *HTTPAPI) handleResponsesProxy(_w http.ResponseWriter, _r *http.Request
 	}
 
 	_started := time.Now()
-	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ResponsesRefusalTerminal, proxy.ResponsesStreamHeartbeat(), _releaseContinuity, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
+	_h.executeProviderRequest(_w, _r, _chatReq, _started, _requestSignals, proxy.ResponsesFailureTerminal, proxy.ResponsesStreamHeartbeat(), _releaseContinuity, func(_ctx context.Context, _attemptWriter http.ResponseWriter, _target *balancer.ProviderRuntime, _model *domain.LLMModelConfig, _profile domain.RequestProfile, _selectionMeta balancer.SelectionMeta) (proxy.ChatMetrics, error) {
 		return _h.Client.ForwardResponses(_ctx, _attemptWriter, _r, _target, _model, _body, _profile, _selectionMeta)
 	})
 }
@@ -3247,7 +3247,7 @@ const providerRetryKeepaliveInterval = 3 * time.Second
 // -------------------------------------------------------------------------------------
 // startRetryKeepalive 在還沒有任何回應內容送出的期間，定期送出保活心跳。
 // 心跳不帶回應內容，所以不會剝奪換帳號重試的能力。
-func startRetryKeepalive(_ctx context.Context, _deferred *deferredResponseWriter, _stream bool, _heartbeat []byte) func() {
+func startRetryKeepalive(_ctx context.Context, _deferred *deferredResponseWriter, _stream bool, _heartbeat []byte, _cancel context.CancelFunc) func() {
 	if !_stream || _deferred == nil || len(_heartbeat) == 0 {
 		return func() {}
 	}
@@ -3270,6 +3270,9 @@ func startRetryKeepalive(_ctx context.Context, _deferred *deferredResponseWriter
 					return
 				}
 				if _err := _deferred.WriteStreamHeartbeat(_heartbeat); _err != nil {
+					if _cancel != nil {
+						_cancel()
+					}
 					return
 				}
 			}
@@ -3318,11 +3321,40 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 	_headersSent := false
 	var _lastErr error
 	var _lastDeferred *deferredResponseWriter
+	_waitedForCooldown := time.Duration(0)
 
 	for _attempt := 0; _attempt <= _maxRetries; _attempt++ {
 		_target, _model, _profile, _selectionMeta, _err := _h.Balancer.SelectExcluding(&_request, _excluded)
+		if _err != nil && _request.Stream && (_lastErr == nil || proxy.ClassifyFailure(_lastErr).Capacity) {
+			// 一輪候選用盡後允許已恢復的候選重入，但不增加實際嘗試次數上限。
+			if len(_excluded) > 0 {
+				_target, _model, _profile, _selectionMeta, _err = _h.Balancer.SelectExcluding(&_request, nil)
+			}
+			if _err != nil && _r.Context().Err() == nil {
+				_waitWriter := newDeferredResponseWriter(_w, true)
+				if _headersSent {
+					_waitWriter.AdoptCommitted()
+				}
+				_elapsed, _ready := waitForProviderCooldown(_r.Context(), _waitWriter, _heartbeat, _err, providerCooldownWaitBudget-_waitedForCooldown)
+				_waitedForCooldown += _elapsed
+				_headersSent = _headersSent || _waitWriter.Committed()
+				if _lastDeferred == nil {
+					_lastDeferred = _waitWriter
+				} else if _headersSent {
+					_lastDeferred.AdoptCommitted()
+				}
+				if _r.Context().Err() != nil {
+					return
+				}
+				if _ready {
+					_excluded = nil
+					_attempt--
+					continue
+				}
+			}
+		}
 		if _err != nil {
-			if _lastDeferred != nil && _lastDeferred.HasBufferedResponse() {
+			if !_request.Stream && _lastDeferred != nil && !_lastDeferred.Committed() && _lastDeferred.HasBufferedResponse() {
 				_ = _lastDeferred.Commit()
 				return
 			}
@@ -3372,10 +3404,11 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 		}
 		// 保活必須涵蓋整個嘗試：上游過載時要 1.5～4 秒才回錯誤，
 		// 那段期間內建心跳照不到（還沒有上游串流可監看）。
-		_stopKeepalive := startRetryKeepalive(_r.Context(), _deferred, _request.Stream, _heartbeat)
+		_stopKeepalive := startRetryKeepalive(_ctx, _deferred, _request.Stream, _heartbeat, _cancel)
 		_metrics, _forwardErr := _forward(_ctx, _deferred, _target, _model, _profile, _selectionMeta)
 		_stopKeepalive()
 		_cancel()
+		proxy.EnrichFailure(_forwardErr, _deferred.BufferedBody())
 		if _deferred.Committed() {
 			_headersSent = true
 		}
@@ -3401,7 +3434,7 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 			}
 		}
 
-		recordProviderForwardFailure(_target, _forwardErr, _r, _attemptDuration, _h.providerCapacityCooldown())
+		recordProviderForwardFailure(_target, _forwardErr, _r, _attemptDuration, _h.providerCapacityCooldown(), _model.Name)
 		_ = history.RecordChat(history.RecordFromSelection(_attemptStarted, time.Now(), _request, _target, _model, _profile, _selectionMeta, false, _forwardErr))
 		_lastErr = _forwardErr
 		_lastDeferred = _deferred
@@ -3409,12 +3442,11 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 			if _deferred.ContentWritten() {
 				return
 			}
-			if !_deferred.Committed() && _deferred.HasBufferedResponse() {
+			if !_request.Stream && !_deferred.Committed() && _deferred.HasBufferedResponse() {
 				_ = _deferred.Commit()
 				return
 			}
-			// 重試用盡且確定沒有送出任何內容：用一則「正常完成」的訊息收尾。
-			// 回 502 會讓客戶端判定串流中斷並顯示「正在重新連線」，反而比原本更吵。
+			// 重試用盡且尚未送出有效內容：使用對應協定的終止事件帶出錯誤。
 			if _h.writeGracefulStreamTerminal(_w, _deferred, _request.Stream, _refusalTerminal, _forwardErr) {
 				return
 			}
@@ -3450,7 +3482,7 @@ func (_h *HTTPAPI) executeProviderRequest(_w http.ResponseWriter, _r *http.Reque
 }
 
 // -------------------------------------------------------------------------------------
-// writeGracefulStreamTerminal 在重試用盡時，用一則正常完成的串流訊息收尾並帶出原因。
+// writeGracefulStreamTerminal 在重試用盡時，以對應協定的串流終止事件帶出原因。
 // 只有「串流請求」且「確定尚未送出任何內容」時適用；回傳 false 代表無法收尾，
 // 呼叫端應改回一般錯誤回應。
 func (_h *HTTPAPI) writeGracefulStreamTerminal(_w http.ResponseWriter, _deferred *deferredResponseWriter, _stream bool, _refusalTerminal func(string) []byte, _err error) bool {
@@ -3583,6 +3615,11 @@ func providerFailureCanRetryBeforeFirstToken(_err error, _deferred *deferredResp
 	// 保活心跳會 commit，但它不帶回應內容，送過心跳仍然可以換帳號重試。
 	if _err == nil || _deferred == nil || _deferred.ContentWritten() {
 		return false
+	}
+	if _policy := proxy.ClassifyFailure(_err); _policy.Request {
+		return false
+	} else if _policy.Capacity {
+		return true
 	}
 	_statusCode := _deferred.StatusCode()
 	switch _statusCode {
@@ -3983,18 +4020,29 @@ func (_h *HTTPAPI) pinnedRoutingUnavailableReason(_r *http.Request) string {
 }
 
 // -------------------------------------------------------------------------------------
-func recordProviderForwardFailure(_provider *balancer.ProviderRuntime, _err error, _request *http.Request, _latency time.Duration, _capacityCooldown time.Duration) {
+func recordProviderForwardFailure(_provider *balancer.ProviderRuntime, _err error, _request *http.Request, _latency time.Duration, _capacityCooldown time.Duration, _models ...string) {
 	if _provider == nil || _err == nil {
 		return
 	}
 	if proxy.IsUpstreamRequestRejected(_err) {
 		return
 	}
+	_policy := proxy.ClassifyFailure(_err)
+	if _policy.Request {
+		return
+	}
 	if providerForwardFailureIsAuth(_err) {
 		_provider.MarkAuthError(_err.Error())
 		return
 	}
-	if proxy.IsRetryableCapacityError(_err) {
+	if _policy.Capacity {
+		if _policy.RetryAfter > 0 {
+			_capacityCooldown = _policy.RetryAfter
+		}
+		if _policy.ModelOnly && len(_models) > 0 && _models[0] != "" {
+			_provider.MarkModelUnavailable(_models[0], _latency, _capacityCooldown)
+			return
+		}
 		_provider.MarkTemporaryUnavailable(_latency, _capacityCooldown)
 		return
 	}

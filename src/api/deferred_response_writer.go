@@ -3,10 +3,14 @@ package api
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"time"
+
+	"LoadBalanceProvider/src/proxy"
 )
 
 // -------------------------------------------------------------------------------------
@@ -62,9 +66,6 @@ func (_w *deferredResponseWriter) Header() http.Header {
 func (_w *deferredResponseWriter) WriteHeader(_statusCode int) {
 	_w.lock.Lock()
 	defer _w.lock.Unlock()
-	if _w.committed {
-		return
-	}
 	if _w.statusCode == 0 {
 		_w.statusCode = _statusCode
 	}
@@ -75,7 +76,13 @@ func (_w *deferredResponseWriter) Write(_data []byte) (int, error) {
 	_w.lock.Lock()
 	defer _w.lock.Unlock()
 	// 這裡寫的一律是真正的回應內容（心跳走 WriteStreamHeartbeat）。
-	if _w.committed {
+	if _w.contentWritten && _w.statusCode < http.StatusBadRequest {
+		defer _w.boundWriteLocked()()
+		if _w.buffer.Len() > 0 {
+			if _, _err := io.Copy(_w.target, &_w.buffer); _err != nil {
+				return 0, _err
+			}
+		}
 		_w.contentWritten = true
 		return _w.target.Write(_data)
 	}
@@ -103,6 +110,7 @@ func (_w *deferredResponseWriter) Flush() {
 	if !_w.committed {
 		return
 	}
+	defer _w.boundWriteLocked()()
 	flushHTTPResponseWriter(_w.target)
 }
 
@@ -116,19 +124,33 @@ func (_w *deferredResponseWriter) WriteStreamHeartbeat(_data []byte) error {
 	}
 	_w.lock.Lock()
 	defer _w.lock.Unlock()
-	if _w.committed {
-		_, _w.writeErr = _w.target.Write(_data)
-		flushHTTPResponseWriter(_w.target)
-		return _w.writeErr
+	if _w.statusCode >= http.StatusBadRequest {
+		return nil
 	}
-	if _w.statusCode == 0 {
-		_w.statusCode = http.StatusOK
+	defer _w.boundWriteLocked()()
+	if !_w.committed {
+		// 不讀取轉發 goroutine 正在填寫的 header，也不送出待判斷的失敗內容。
+		_header := _w.target.Header()
+		_header.Set("Content-Type", "text/event-stream")
+		_header.Set("Cache-Control", "no-cache")
+		_header.Set("X-Accel-Buffering", "no")
+		_w.target.WriteHeader(http.StatusOK)
+		_w.committed = true
 	}
-	if _, _w.writeErr = _w.buffer.Write(_data); _w.writeErr != nil {
-		return _w.writeErr
+	_, _w.writeErr = _w.target.Write(_data)
+	if _w.writeErr == nil {
+		_w.writeErr = proxy.FlushResponseWriter(_w.target)
+		if errors.Is(_w.writeErr, http.ErrNotSupported) {
+			_w.writeErr = nil
+		}
 	}
-	_w.writeErr = _w.commitLocked()
 	return _w.writeErr
+}
+
+// 寫入期限只涵蓋下游 I/O，不限制工具執行或正常串流的總時間。
+func (_w *deferredResponseWriter) boundWriteLocked() func() {
+	_ = proxy.SetResponseWriteDeadline(_w.target, time.Now().Add(30*time.Second))
+	return func() { _ = proxy.SetResponseWriteDeadline(_w.target, time.Time{}) }
 }
 
 // -------------------------------------------------------------------------------------
@@ -143,21 +165,24 @@ func (_w *deferredResponseWriter) Commit() error {
 
 // -------------------------------------------------------------------------------------
 func (_w *deferredResponseWriter) commitLocked() error {
-	if _w == nil || _w.committed {
-		return _w.writeErr
+	if _w == nil {
+		return nil
 	}
-	for _name, _values := range _w.header {
-		_w.target.Header().Del(_name)
-		for _, _value := range _values {
-			_w.target.Header().Add(_name, _value)
+	defer _w.boundWriteLocked()()
+	if !_w.committed {
+		for _name, _values := range _w.header {
+			_w.target.Header().Del(_name)
+			for _, _value := range _values {
+				_w.target.Header().Add(_name, _value)
+			}
 		}
+		_statusCode := _w.statusCode
+		if _statusCode == 0 {
+			_statusCode = http.StatusOK
+		}
+		_w.target.WriteHeader(_statusCode)
+		_w.committed = true
 	}
-	_statusCode := _w.statusCode
-	if _statusCode == 0 {
-		_statusCode = http.StatusOK
-	}
-	_w.target.WriteHeader(_statusCode)
-	_w.committed = true
 	if _w.pendingContent {
 		// 內容真的離開緩衝送給客戶端了，這一刻起才沒有退路。
 		_w.contentWritten = true
@@ -179,9 +204,6 @@ func (_w *deferredResponseWriter) ResetForGracefulTerminal() bool {
 	defer _w.lock.Unlock()
 	if _w.contentWritten {
 		return false
-	}
-	if _w.committed {
-		return true
 	}
 	_w.buffer.Reset()
 	_w.pendingContent = false
@@ -247,16 +269,18 @@ func (_w *deferredResponseWriter) HasBufferedResponse() bool {
 
 // -------------------------------------------------------------------------------------
 func flushHTTPResponseWriter(_writer http.ResponseWriter) {
-	if _flusher, _ok := _writer.(http.Flusher); _ok {
-		_flusher.Flush()
-		return
-	}
-	_ = http.NewResponseController(_writer).Flush()
+	_ = proxy.FlushResponseWriter(_writer)
 }
 
 // -------------------------------------------------------------------------------------
 func streamBufferHasForwardableEvent(_data []byte) bool {
-	for _, _line := range strings.Split(string(_data), "\n") {
+	// 初始化事件及分段 JSON 留在緩衝，直到完整的有效事件或成功終止事件到達。
+	_text := strings.ReplaceAll(string(_data), "\r\n", "\n")
+	_end := strings.LastIndex(_text, "\n\n")
+	if _end < 0 {
+		return false
+	}
+	for _, _line := range strings.Split(_text[:_end], "\n") {
 		_line = strings.TrimSpace(_line)
 		if !strings.HasPrefix(_line, "data:") {
 			continue
@@ -271,6 +295,10 @@ func streamBufferHasForwardableEvent(_data []byte) bool {
 		var _payload map[string]interface{}
 		if _err := json.Unmarshal([]byte(_payloadText), &_payload); _err != nil {
 			return true
+		}
+		switch strings.ToLower(strings.TrimSpace(stringValue(_payload["type"]))) {
+		case "response.created", "response.queued", "response.in_progress", "codex.rate_limits", "codex.response.metadata", "ping", "response.ping", "heartbeat":
+			continue
 		}
 		if !streamPayloadIsFailure(_payload) {
 			return true

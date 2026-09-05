@@ -120,7 +120,7 @@ func (_c *Client) forwardOpenAICodexCompletion(_ctx context.Context, _w http.Res
 	_authToken := strings.TrimSpace(_apiKey)
 	_accountID := ""
 	if _authToken == "" {
-		auth, err := codexauth.Ensure(_provider.Config.ID)
+		auth, err := codexauth.EnsureContext(_ctx, _provider.Config.ID)
 		if err != nil {
 			return ChatMetrics{}, fmt.Errorf("openai codex oauth unavailable: %w", err)
 		}
@@ -155,7 +155,7 @@ func (_c *Client) forwardOpenAICodexCompletion(_ctx context.Context, _w http.Res
 	if client == nil {
 		client = &http.Client{Timeout: 0}
 	}
-	resp, err := security.GuardedHTTPClient(client).Do(req)
+	resp, err := doCodexHTTPRequest(client, req, _provider, _useAPIKey)
 	if err != nil {
 		return ChatMetrics{}, err
 	}
@@ -164,7 +164,9 @@ func (_c *Client) forwardOpenAICodexCompletion(_ctx context.Context, _w http.Res
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
-		return ChatMetrics{}, fmt.Errorf("openai codex response failed: status %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		failure := &ProviderStatusError{FailureDetails: FailureDetails{RetryAfter: retryAfterHeader(resp.Header)}, StatusCode: resp.StatusCode, Message: strings.TrimSpace(string(raw))}
+		EnrichFailure(failure, string(raw))
+		return ChatMetrics{}, failure
 	}
 
 	_outboundStream := _chatReq.Stream || !_useAPIKey
@@ -172,7 +174,9 @@ func (_c *Client) forwardOpenAICodexCompletion(_ctx context.Context, _w http.Res
 	if _outboundStream {
 		_w.WriteHeader(http.StatusOK)
 		flushResponse(_w)
-		return streamCodexResponsesAsChat(_w, resp.Body, _upstreamModel, _started)
+		_idleReader := newStreamIdleTimeoutReader(resp.Body, providerStreamIdleTimeout(_provider))
+		defer _idleReader.Stop()
+		return streamCodexResponsesAsChat(_w, _idleReader, _upstreamModel, _started)
 	}
 
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
@@ -211,7 +215,7 @@ func (_c *Client) forwardOpenAICodexResponsesRoute(_ctx context.Context, _w http
 	_authToken := strings.TrimSpace(_apiKey)
 	_accountID := ""
 	if _authToken == "" {
-		auth, err := codexauth.Ensure(_provider.Config.ID)
+		auth, err := codexauth.EnsureContext(_ctx, _provider.Config.ID)
 		if err != nil {
 			return ChatMetrics{}, fmt.Errorf("openai codex oauth unavailable: %w", err)
 		}
@@ -258,7 +262,7 @@ func (_c *Client) forwardOpenAICodexResponsesRoute(_ctx context.Context, _w http
 	if client == nil {
 		client = &http.Client{Timeout: 0}
 	}
-	resp, err := security.GuardedHTTPClient(client).Do(req)
+	resp, err := doCodexHTTPRequest(client, req, _provider, _useAPIKey)
 	if err != nil {
 		return ChatMetrics{}, err
 	}
@@ -278,7 +282,7 @@ func (_c *Client) forwardOpenAICodexResponsesRoute(_ctx context.Context, _w http
 		} else {
 			_, _ = io.Copy(_w, resp.Body)
 		}
-		return ChatMetrics{}, &ProviderStatusError{StatusCode: resp.StatusCode, ResponseForwarded: true}
+		return ChatMetrics{}, &ProviderStatusError{FailureDetails: FailureDetails{RetryAfter: retryAfterHeader(resp.Header)}, StatusCode: resp.StatusCode, ResponseForwarded: true}
 	}
 
 	if _stream {
@@ -877,8 +881,12 @@ func streamCodexResponsesAsChat(_w http.ResponseWriter, _body io.Reader, _model 
 	_buffer := make([]byte, 32*1024)
 	_pending := ""
 	_processEvent := func(_event string) (bool, error) {
+		markStreamActivity(_body, _event)
 		_name, _payload := codexSSEEventNameAndPayload(_event)
-		if _payload == "" || _payload == "[DONE]" {
+		if _payload == "" {
+			return false, nil
+		}
+		if _payload == "[DONE]" {
 			return true, nil
 		}
 		return writeCodexEventAsChat(_w, _name, _payload, _model, _started, &metrics, state)

@@ -62,12 +62,15 @@ var (
 
 // -------------------------------------------------------------------------------------
 type ProviderStatusError struct {
+	FailureDetails
+	Message           string
 	StatusCode        int
 	ResponseForwarded bool
 }
 
 // -------------------------------------------------------------------------------------
 type ProviderStreamError struct {
+	FailureDetails
 	Message           string
 	RetryableCapacity bool
 	ResponseForwarded bool
@@ -140,6 +143,7 @@ type ResponseRouteTarget struct {
 
 // -------------------------------------------------------------------------------------
 type streamEvent struct {
+	FailureDetails
 	Body              string
 	Suppress          bool
 	HasContent        bool
@@ -173,6 +177,9 @@ type streamIdleTimeoutReader struct {
 
 // -------------------------------------------------------------------------------------
 func (_e *ProviderStatusError) Error() string {
+	if _e.Message != "" {
+		return fmt.Sprintf("provider returned status %d: %s", _e.StatusCode, _e.Message)
+	}
 	return fmt.Sprintf("provider returned status %d", _e.StatusCode)
 }
 
@@ -291,7 +298,7 @@ func (_c *Client) ForwardChatCompletion(_ctx context.Context, _w http.ResponseWr
 			if _chatReq.Stream {
 				flushResponse(_w)
 			}
-			return ChatMetrics{}, &ProviderStatusError{StatusCode: _resp.StatusCode, ResponseForwarded: true}
+			return ChatMetrics{}, &ProviderStatusError{FailureDetails: FailureDetails{RetryAfter: retryAfterHeader(_resp.Header)}, StatusCode: _resp.StatusCode, ResponseForwarded: true}
 		}
 	}
 
@@ -351,7 +358,7 @@ func (_c *Client) ForwardMultimodal(_ctx context.Context, _w http.ResponseWriter
 		_, _copyErr = io.Copy(_w, _resp.Body)
 	}
 	if _resp.StatusCode < http.StatusOK || _resp.StatusCode >= http.StatusMultipleChoices {
-		return &ProviderStatusError{StatusCode: _resp.StatusCode, ResponseForwarded: true}
+		return &ProviderStatusError{FailureDetails: FailureDetails{RetryAfter: retryAfterHeader(_resp.Header)}, StatusCode: _resp.StatusCode, ResponseForwarded: true}
 	}
 	return _copyErr
 }
@@ -393,7 +400,7 @@ func (_c *Client) ForwardResponsesRoute(_ctx context.Context, _w http.ResponseWr
 		} else {
 			_, _ = io.Copy(_w, _resp.Body)
 		}
-		return ChatMetrics{}, &ProviderStatusError{StatusCode: _resp.StatusCode, ResponseForwarded: true}
+		return ChatMetrics{}, &ProviderStatusError{FailureDetails: FailureDetails{RetryAfter: retryAfterHeader(_resp.Header)}, StatusCode: _resp.StatusCode, ResponseForwarded: true}
 	}
 
 	if _stream {
@@ -440,7 +447,7 @@ func (_c *Client) sendProviderRequest(_ctx context.Context, _srcReq *http.Reques
 		_targetReq.Header.Set("Authorization", "Bearer "+_apiKey)
 	}
 
-	return security.GuardedHTTPClient(_c.HTTPClient).Do(_targetReq)
+	return doProviderHTTPRequest(_c.HTTPClient, _targetReq, providerStreamIdleTimeout(_provider))
 }
 
 // -------------------------------------------------------------------------------------
@@ -483,7 +490,7 @@ func (_c *Client) sendRawProviderRouteRequest(_ctx context.Context, _srcReq *htt
 	if _client == nil {
 		_client = &http.Client{Timeout: 0}
 	}
-	return security.GuardedHTTPClient(_client).Do(_targetReq)
+	return doProviderHTTPRequest(_client, _targetReq, providerStreamIdleTimeout(_provider))
 }
 
 // -------------------------------------------------------------------------------------
@@ -1477,6 +1484,10 @@ func (_r *streamIdleTimeoutReader) MarkStreamActivity(_eventType string) {
 		return
 	}
 	_eventType = strings.TrimSpace(_eventType)
+	switch strings.ToLower(_eventType) {
+	case "comment", "ping", "heartbeat", "keepalive", "keep-alive":
+		return
+	}
 	if _eventType == "" {
 		_eventType = "sse-event"
 	}
@@ -1564,6 +1575,14 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 	_writerMetrics := ChatMetrics{}
 	_terminalSeen := false
 	_responseSnapshot := newResponsesStreamSnapshot(_recordResponseID)
+	_failureState := responseFailureState{}
+	_completionRepair := completionRepair{}
+	if _failureTerminal != nil {
+		_originalFailureTerminal := _failureTerminal
+		_failureTerminal = func(_err error) []byte {
+			return _failureState.decorate(_originalFailureTerminal(_err))
+		}
+	}
 	var _heartbeatTimer *time.Timer
 	var _heartbeat <-chan time.Time
 	if _heartbeatInterval > 0 {
@@ -1608,21 +1627,35 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 			if _event.Suppress {
 				continue
 			}
-			_body := _event.Body
+			_body := _completionRepair.process(_event.Body)
 			_responseSnapshot.consumeEvent(_body)
-			if _event.TerminalError != "" && _refusalTerminal != nil && _writerMetrics.ClientContentItems == 0 &&
+			_failureState.observe(_body)
+			_delivered := _writerMetrics.ClientContentItems > 0 || responseWriterContentWritten(_w)
+			if _event.TerminalError != "" && _refusalTerminal != nil && !_delivered &&
 				(_event.RetryableCapacity || providerErrorTextIsAuthentication(_event.TerminalError) ||
 					providerErrorTextIsRetryableUpstreamFailure(_event.TerminalError)) {
 				_resultValue := <-_result
 				_resultValue.Metrics.mergeClientDelivery(_writerMetrics)
 				_resultValue.Metrics.finalizeClientDelivery()
 				return _resultValue.Metrics, &ProviderStreamError{
+					FailureDetails:    _event.FailureDetails,
 					Message:           _event.TerminalError,
 					RetryableCapacity: _event.RetryableCapacity,
 					ResponseForwarded: false,
 				}
 			}
-			if _event.TerminalError != "" && _refusalTerminal != nil && _writerMetrics.ClientContentItems == 0 {
+			if _event.TerminalError != "" && _failureTerminal != nil && _delivered {
+				if _, _writeErr := _w.Write(_failureTerminal(errors.New(_event.TerminalError))); _writeErr != nil {
+					return _abort(_writeErr)
+				}
+				flushResponse(_w)
+				_resultValue := <-_result
+				_resultValue.Metrics.mergeClientDelivery(_writerMetrics)
+				_resultValue.Metrics.finalizeClientDelivery()
+				_resultValue.Metrics.TerminalSeen = true
+				return _resultValue.Metrics, &ProviderStreamError{FailureDetails: _event.FailureDetails, Message: _event.TerminalError, ResponseForwarded: true}
+			}
+			if _event.TerminalError != "" && _refusalTerminal != nil && !_delivered {
 				if _, _writeErr := _w.Write(_refusalTerminal(_event.TerminalError)); _writeErr != nil {
 					return _abort(_writeErr)
 				}
@@ -1632,6 +1665,7 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 				_resultValue.Metrics.finalizeClientDelivery()
 				_resultValue.Metrics.TerminalSeen = true
 				return _resultValue.Metrics, &ProviderStreamError{
+					FailureDetails:    _event.FailureDetails,
 					Message:           _event.TerminalError,
 					ResponseForwarded: true,
 					UpstreamRejected:  providerErrorTextIsRequestRejection(_event.TerminalError),
@@ -1656,6 +1690,7 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 				_resultValue.Metrics.mergeClientDelivery(_writerMetrics)
 				_resultValue.Metrics.finalizeClientDelivery()
 				return _resultValue.Metrics, &ProviderStreamError{
+					FailureDetails:    _event.FailureDetails,
 					Message:           _event.TerminalError,
 					RetryableCapacity: _event.RetryableCapacity,
 					ResponseForwarded: true,
@@ -1677,7 +1712,7 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 	_metrics.TerminalSeen = _terminalSeen || _resultValue.DoneSeen
 	if _resultValue.Err != nil {
 		if _failureTerminal != nil && !errors.Is(_resultValue.Err, context.Canceled) &&
-			(_writerMetrics.ClientContentItems > 0 || responseWriterCommitted(_w)) {
+			(_writerMetrics.ClientContentItems > 0 || responseWriterContentWritten(_w)) {
 			if _, _writeErr := _w.Write(_failureTerminal(_resultValue.Err)); _writeErr != nil {
 				return _metrics, _writeErr
 			}
@@ -1692,7 +1727,7 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 	}
 	if !_resultValue.DoneSeen {
 		if _failureTerminal != nil {
-			if _writerMetrics.ClientContentItems == 0 && !responseWriterCommitted(_w) {
+			if _writerMetrics.ClientContentItems == 0 && !responseWriterContentWritten(_w) {
 				return _metrics, errResponsesStreamMissingTerminal
 			}
 			if _, _writeErr := _w.Write(_failureTerminal(errResponsesStreamMissingTerminal)); _writeErr != nil {
@@ -1714,9 +1749,9 @@ func streamCopyWithResponseRecorderHeartbeat(_w http.ResponseWriter, _reader io.
 }
 
 // -------------------------------------------------------------------------------------
-func responseWriterCommitted(_w http.ResponseWriter) bool {
-	_committedWriter, _ok := _w.(interface{ Committed() bool })
-	return _ok && _committedWriter.Committed()
+func responseWriterContentWritten(_w http.ResponseWriter) bool {
+	_writer, _ok := _w.(interface{ ContentWritten() bool })
+	return _ok && _writer.ContentWritten()
 }
 
 // -------------------------------------------------------------------------------------
@@ -1761,24 +1796,27 @@ func responsesStreamHeartbeat() []byte {
 
 // -------------------------------------------------------------------------------------
 // responsesStreamFailureTerminal converts an upstream transport failure into a
-// standard Responses error event. This gives Codex a deterministic terminal
+// standard Responses failed event. This gives Codex a deterministic terminal
 // event and preserves the original failure reason instead of ending at EOF.
 func responsesStreamFailureTerminal(_err error) []byte {
 	_message := "upstream response stream interrupted"
 	if _err != nil && strings.TrimSpace(_err.Error()) != "" {
 		_message += ": " + strings.TrimSpace(_err.Error())
 	}
-	_payload, _marshalErr := json.Marshal(map[string]interface{}{
-		"type":            "error",
-		"code":            "upstream_stream_error",
-		"message":         _message,
-		"param":           nil,
-		"sequence_number": 0,
+	return ResponsesFailureTerminal(_message)
+}
+
+// ResponsesFailureTerminal 明確表示請求失敗，不偽裝成成功的 assistant 回覆。
+func ResponsesFailureTerminal(reason string) []byte {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type": "response.failed", "sequence_number": 0,
+		"response": map[string]interface{}{
+			"id":     fmt.Sprintf("resp_proxy_failure_%d", time.Now().UnixNano()),
+			"object": "response", "created_at": time.Now().Unix(), "status": "failed", "output": []interface{}{},
+			"error": map[string]interface{}{"code": "server_error", "message": reason},
+		},
 	})
-	if _marshalErr != nil {
-		_payload = []byte(`{"type":"error","code":"upstream_stream_error","message":"upstream response stream interrupted","param":null,"sequence_number":0}`)
-	}
-	return []byte("event: error\ndata: " + string(_payload) + "\n\n")
+	return []byte("event: response.failed\ndata: " + string(payload) + "\n\n")
 }
 
 // -------------------------------------------------------------------------------------
@@ -2420,11 +2458,12 @@ func (_m *ChatMetrics) mergeProviderEvent(_event string, _started time.Time, _do
 	// finish_reason chunk. Keep reading when the caller requested that final chunk.
 	_terminalEvent := *_doneSeen || (streamEventHasFinishReason(_event) && !_forwardUsage)
 	_streamEvent := streamEvent{
+		FailureDetails:    failureDetailsFromEvent(_event),
 		Body:              _event,
 		Suppress:          !_forwardUsage && isUsageOnlyEvent(_event),
 		HasContent:        _eventMetrics.ContentSeen,
 		TerminalError:     _terminalError,
-		RetryableCapacity: providerErrorTextIsRetryableCapacity(_terminalError),
+		RetryableCapacity: ClassifyFailure(&ProviderStreamError{FailureDetails: failureDetailsFromEvent(_event), Message: _terminalError}).Capacity,
 	}
 	select {
 	case <-_done:
@@ -3581,22 +3620,7 @@ func estimateTokensFromCounts(_chineseChars int, _otherChars int) int {
 
 // -------------------------------------------------------------------------------------
 func flushResponse(_w http.ResponseWriter) {
-	if _w == nil {
-		return
-	}
-
-	if _flusher, _ok := _w.(http.Flusher); _ok {
-		_flusher.Flush()
-		return
-	}
-
-	if _err := http.NewResponseController(_w).Flush(); _err == nil {
-		return
-	}
-
-	if _next := embeddedResponseWriter(_w); _next != nil {
-		flushResponse(_next)
-	}
+	_ = FlushResponseWriter(_w)
 }
 
 // -------------------------------------------------------------------------------------

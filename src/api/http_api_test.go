@@ -1592,7 +1592,7 @@ func TestRetryKeepaliveKeepsClientAlive(t *testing.T) {
 	_ctx, _cancel := context.WithCancel(context.Background())
 	defer _cancel()
 
-	_stop := startRetryKeepalive(_ctx, _writer, true, proxy.ResponsesStreamHeartbeat())
+	_stop := startRetryKeepalive(_ctx, _writer, true, proxy.ResponsesStreamHeartbeat(), nil)
 	_deadline := time.Now().Add(providerRetryKeepaliveInterval * 3)
 	for time.Now().Before(_deadline) && !_writer.Committed() {
 		time.Sleep(50 * time.Millisecond)
@@ -1615,7 +1615,7 @@ func TestRetryKeepaliveKeepsClientAlive(t *testing.T) {
 func TestRetryKeepaliveSkipsNonStreamingRequests(t *testing.T) {
 	_recorder := httptest.NewRecorder()
 	_writer := newDeferredResponseWriter(_recorder, false)
-	_stop := startRetryKeepalive(context.Background(), _writer, false, proxy.ResponsesStreamHeartbeat())
+	_stop := startRetryKeepalive(context.Background(), _writer, false, proxy.ResponsesStreamHeartbeat(), nil)
 	time.Sleep(20 * time.Millisecond)
 	_stop()
 	if _writer.Committed() || _recorder.Body.Len() != 0 {

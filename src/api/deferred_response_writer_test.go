@@ -10,16 +10,34 @@ import (
 	"LoadBalanceProvider/src/proxy"
 )
 
+func TestDeferredInitializationRemainsBufferedAfterHeartbeatSmoke(t *testing.T) {
+	r := httptest.NewRecorder()
+	w := newDeferredResponseWriter(r, true)
+	w.WriteStreamHeartbeat([]byte(": ping\n\n"))
+	for _, kind := range []string{"response.created", "response.in_progress", "codex.rate_limits", "codex.response.metadata"} {
+		w.Write([]byte("data: {\"type\":\"" + kind + "\"}\n\n"))
+	}
+	w.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"x"))
+	if w.ContentWritten() || r.Body.String() != ": ping\n\n" {
+		t.Fatalf("incomplete content leaked: %s", r.Body.String())
+	}
+	w.Write([]byte("\"}\n\n"))
+	if !w.ContentWritten() || !strings.Contains(r.Body.String(), "response.output_text.delta") {
+		t.Fatal("complete content remained buffered")
+	}
+}
+
 // -------------------------------------------------------------------------------------
-func TestDeferredResponseWriterCommitsOnFirstResponsesEvent(t *testing.T) {
+func TestDeferredResponseWriterBuffersInitializationUntilContent(t *testing.T) {
 	_recorder := httptest.NewRecorder()
 	_writer := newDeferredResponseWriter(_recorder, true)
 	_writer.Header().Set("Content-Type", "text/event-stream")
 	_writer.WriteHeader(http.StatusOK)
 	_, _ = _writer.Write([]byte("event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\"}}\n\n"))
-	if !_writer.Committed() {
-		t.Fatal("first normal Responses event should commit response")
+	if _writer.Committed() || _recorder.Body.Len() != 0 {
+		t.Fatal("initialization must remain buffered")
 	}
+	_, _ = _writer.Write([]byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n"))
 	if !strings.Contains(_recorder.Body.String(), "response.created") {
 		t.Fatalf("committed response lost first event: %s", _recorder.Body.String())
 	}

@@ -9,7 +9,7 @@
 | 參數 | 說明 |
 | :--- | :--- |
 | `selection_strategy` | 負載平衡策略，目前預設 `random`，並保留 `weighted_score`。 |
-| `retry_count` | 首 Token 前可自動排除失敗 Provider 並重新選路由的次數；已開始輸出後不切換。 |
+| `retry_count` | 尚未轉送有效內容時，遇到可重試故障可重新選路由的次數；文字或工具呼叫已送出後不再重播。 |
 | `providers[].id` | Provider 唯一識別碼。 |
 | `providers[].base_url` | OpenAI-compatible Provider base URL。 |
 | `providers[].api_key_env` | API key 的環境變數名稱。 |
@@ -18,11 +18,28 @@
 | `providers[].weight` | 權重，數值越高越容易被選中。 |
 | `providers[].priority` | 優先序調整，數值越高會降低分數。 |
 | `providers[].max_concurrent` | 同時處理 request 上限。 |
+| `providers[].timeout_seconds` | 預設 `300` 秒；串流用於上游回應標頭等待與無進展逾時，而非整段串流的總時長。非串流請求仍受請求期限限制。 |
 | `models[].max_input_tokens` | 模型可接受的最大輸入 token。 |
 | `models[].max_output_tokens` | 模型可接受的最大輸出 token。 |
 | `models[].capabilities` | 模型適合的任務類型，例如 `chat`、`reasoning`、`coding`、`summarization`。 |
 | `models[].cost_tier` | 成本級距，數值越高代表越昂貴。 |
 | `models[].quality_tier` | 品質級距，數值越高代表越適合高複雜度任務。 |
+
+### 容量冷卻與 OAuth
+
+`data/advanced_settings.json` 的 `provider_capacity_cooldown_seconds` 為預設容量冷卻時間，預設 `10` 秒，可在管理介面的進階設定調整。上游回報有效 `Retry-After` 時優先採用該值。模型故障與帳號配額故障分開冷卻，同一有效窗口內的並發失敗不會重設冷卻期限，較早開始的請求成功也不會清除新的容量冷卻。
+
+串流請求可在候選都處於容量冷卻時等待恢復，每個請求累計最多 `30` 秒；等待時間超過剩餘預算便回傳終止錯誤，不會無限保留請求。這是程式內建的冷卻等待預算，不是可編輯設定，也不是整段任務總時限。冷卻狀態僅保存在目前服務程序記憶體，重啟後重新累積。
+
+Codex OAuth 的並發刷新依 token 儲存路徑與 Provider ID 序列化；同一程序共用 token 儲存鎖，避免不同 Provider 寫入同一檔案時互相覆蓋。HTTP `401` 最多觸發一次刷新後重送，不套用於 API key 認證，也不重播已開始輸出的串流。多個服務程序之間不共用此鎖，請勿讓多個實例同時寫入同一份 token 檔案。
+
+### 串流連線與反向代理
+
+- 關閉 SSE 回應緩衝與快取，並允許即時傳送小型資料區塊。服務會設定 `Cache-Control: no-cache` 與 `X-Accel-Buffering: no`，反向代理仍需確認未覆寫這些行為。
+- 尚未取得有效上游內容的嘗試與冷卻等待期間，服務每 `3` 秒提供下游保活心跳；串流內也有保活處理。心跳不代表模型有進展，上游純心跳不會重設無進展逾時。
+- 反向代理的讀取閒置期限應大於心跳間隔並預留網路延遲；若平台另有總請求時長限制，心跳無法解除該限制。
+- 用戶端取消或下游寫入失敗時會停止等待，不應透過無限制增加逾時來掩蓋問題。Responses 故障以 `response.failed` 帶出原因，請區分上游拒絕、過載、等待標頭逾時與真正的網路斷線。
+- 重送僅限尚未轉交文字或工具呼叫的階段；此限制避免下游重複執行工具，但不保證上游未產生計費或其他副作用。
 
 ### 低推理降級
 

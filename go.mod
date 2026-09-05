@@ -10,7 +10,7 @@ require (
 require github.com/andybalholm/brotli v1.2.1 // indirect
 
 require (
-	github.com/MarsSemi/MarsCloud-SaaS/SDK v0.1.21
+	github.com/MarsSemi/MarsCloud-SaaS/SDK v0.1.22
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0 // indirect
 	github.com/eclipse/paho.mqtt.golang v1.5.1 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect

@@ -172,12 +172,22 @@ func Ensure(providerID string) (Auth, error) {
 	return NewStore(defaultTokenPath).Ensure(providerID)
 }
 
+func EnsureContext(ctx context.Context, providerID string) (Auth, error) {
+	return NewStore(defaultTokenPath).EnsureContext(ctx, providerID)
+}
+
+var sharedStores sync.Map
+
 // -------------------------------------------------------------------------------------
 func NewStore(path string) *Store {
 	if strings.TrimSpace(path) == "" {
 		path = defaultTokenPath
 	}
-	return &Store{Path: path}
+	if absolute, err := filepath.Abs(path); err == nil {
+		path = absolute
+	}
+	store, _ := sharedStores.LoadOrStore(path, &Store{Path: path})
+	return store.(*Store)
 }
 
 // -------------------------------------------------------------------------------------
@@ -463,6 +473,10 @@ func (s *Store) startDeviceFlow(providerID string) (StartResult, error) {
 
 // -------------------------------------------------------------------------------------
 func (s *Store) Ensure(providerID string) (Auth, error) {
+	return s.EnsureContext(context.Background(), providerID)
+}
+
+func (s *Store) ensureLocked(ctx context.Context, providerID string) (Auth, error) {
 	providerID = strings.TrimSpace(providerID)
 	if providerID == "" {
 		return Auth{}, fmt.Errorf("provider id is required")
@@ -473,13 +487,16 @@ func (s *Store) Ensure(providerID string) (Auth, error) {
 		return Auth{AccessToken: strings.TrimSpace(record.AccessToken), AccountID: accountID(record)}, nil
 	}
 	if err == nil && strings.TrimSpace(record.RefreshToken) != "" {
-		if refreshed, refreshErr := refreshToken(record); refreshErr == nil {
+		if refreshed, refreshErr := refreshTokenContext(ctx, record); refreshErr == nil {
 			next := mergeToken(record, refreshed)
 			if saveErr := s.Save(next); saveErr != nil {
 				return Auth{}, saveErr
 			}
 			return Auth{AccessToken: strings.TrimSpace(next.AccessToken), AccountID: accountID(next)}, nil
 		} else {
+			if ctx.Err() != nil {
+				return Auth{}, ctx.Err()
+			}
 			record.RefreshFailed = refreshErr.Error()
 			_ = s.Save(record)
 		}
@@ -501,7 +518,7 @@ func (s *Store) Ensure(providerID string) (Auth, error) {
 	if strings.TrimSpace(imported.RefreshToken) == "" {
 		return Auth{}, fmt.Errorf("codex oauth token expired and refresh token is missing")
 	}
-	refreshed, refreshErr := refreshToken(imported)
+	refreshed, refreshErr := refreshTokenContext(ctx, imported)
 	if refreshErr != nil {
 		return Auth{}, refreshErr
 	}
@@ -818,12 +835,16 @@ func fetchUserInfo(accessToken string) (openAIUserInfo, error) {
 
 // -------------------------------------------------------------------------------------
 func refreshToken(record OAuthTokenRecord) (tokenResponse, error) {
+	return refreshTokenContext(context.Background(), record)
+}
+
+func refreshTokenContext(ctx context.Context, record OAuthTokenRecord) (tokenResponse, error) {
 	values := url.Values{}
 	values.Set("grant_type", "refresh_token")
 	values.Set("client_id", openAIClientID)
 	values.Set("refresh_token", strings.TrimSpace(record.RefreshToken))
 
-	req, err := http.NewRequest(http.MethodPost, openAITokenURL, strings.NewReader(values.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, openAITokenURL, strings.NewReader(values.Encode()))
 	if err != nil {
 		return tokenResponse{}, err
 	}

@@ -41,6 +41,8 @@ type LoadBalancer struct {
 
 // -------------------------------------------------------------------------------------
 type ProviderRuntime struct {
+	modelCooldownLock        sync.Mutex
+	modelCooldowns           map[string]time.Time
 	Config                   *domain.LLMProviderConfig
 	Active                   int64
 	Successes                int64
@@ -332,14 +334,25 @@ func (_b *LoadBalancer) noAvailableProviderError(_req *domain.ChatCompletionRequ
 			continue
 		}
 
-		_matchingProviders++
-		if !_provider.CapacityUnavailable(_now) {
+		if _provider.HasAuthError() || _provider.CircuitOpen(_now) {
 			continue
 		}
-		_capacityUnavailableProviders++
-		_until := time.Unix(0, atomic.LoadInt64(&_provider.CapacityUnavailableUntil))
-		if _earliestRetry.IsZero() || _until.Before(_earliestRetry) {
-			_earliestRetry = _until
+		for _, _model := range candidateModels(_provider.Config, _requestedModel) {
+			if !modelMatchesSelectionConstraints(&_model, _profile, _requestedModel) {
+				continue
+			}
+			_matchingProviders++
+			_until := _provider.ModelUnavailableUntil(_model.Name)
+			if _accountUntil := time.Unix(0, atomic.LoadInt64(&_provider.CapacityUnavailableUntil)); _accountUntil.After(_until) {
+				_until = _accountUntil
+			}
+			if !_until.After(_now) {
+				continue
+			}
+			_capacityUnavailableProviders++
+			if _earliestRetry.IsZero() || _until.Before(_earliestRetry) {
+				_earliestRetry = _until
+			}
 		}
 	}
 
@@ -471,6 +484,9 @@ func (_b *LoadBalancer) collectCandidates(_req *domain.ChatCompletionRequest, _p
 		_models := candidateModels(_provider.Config, _requestedModel)
 		for _modelIdx := range _models {
 			_model := &_models[_modelIdx]
+			if _provider.ModelUnavailableUntil(_model.Name).After(_now) {
+				continue
+			}
 			if !modelMatchesSelectionConstraints(_model, _profile, _requestedModel) {
 				continue
 			}
@@ -1027,7 +1043,6 @@ func (_p *ProviderRuntime) MarkSuccessWithMetrics(_latency time.Duration, _compl
 	atomic.AddInt64(&_p.Successes, 1)
 	atomic.StoreInt64(&_p.ConsecutiveFailures, 0)
 	atomic.StoreInt64(&_p.CircuitOpenUntil, 0)
-	atomic.StoreInt64(&_p.CapacityUnavailableUntil, 0)
 	_p.ClearAuthError()
 	_p.recordLatency(_latency)
 	_p.recordReaction(_reactionMS)
@@ -1039,7 +1054,6 @@ func (_p *ProviderRuntime) MarkSuccessWithMetrics(_latency time.Duration, _compl
 func (_p *ProviderRuntime) MarkFailure(_latency time.Duration) {
 	atomic.AddInt64(&_p.Failures, 1)
 	_failures := atomic.AddInt64(&_p.ConsecutiveFailures, 1)
-	atomic.StoreInt64(&_p.CapacityUnavailableUntil, 0)
 	_p.recordLatency(_latency)
 	if _failures >= 3 {
 		atomic.StoreInt64(&_p.CircuitOpenUntil, time.Now().Add(30*time.Second).UnixNano())
@@ -1054,7 +1068,12 @@ func (_p *ProviderRuntime) MarkTemporaryUnavailable(_latency time.Duration, _dur
 	atomic.AddInt64(&_p.Failures, 1)
 	_p.recordLatency(_latency)
 	_until := time.Now().Add(_duration).UnixNano()
-	atomic.StoreInt64(&_p.CapacityUnavailableUntil, _until)
+	for {
+		_previous := atomic.LoadInt64(&_p.CapacityUnavailableUntil)
+		if _previous > time.Now().UnixNano() || atomic.CompareAndSwapInt64(&_p.CapacityUnavailableUntil, _previous, _until) {
+			break
+		}
+	}
 }
 
 // -------------------------------------------------------------------------------------
